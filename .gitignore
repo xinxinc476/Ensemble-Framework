@@ -3,3 +3,8 @@
 .RData
 .Ruserdata
 Analysis/Results
+.DS_Store
+Analysis/Stan/glm_pp
+Analysis/Stan/glm_stratified_pp
+*.Rproj
+*.rds
