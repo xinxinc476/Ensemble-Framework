@@ -1,0 +1,653 @@
+---
+title: "Analysis of Replase-Free Survival (RFS) Time for (E1684, E1690) Data Sets"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(survival)
+library(hdbayes)
+library(posterior)
+library(ggplot2)
+library(latex2exp)
+library(collapse)
+library(loo)
+
+wrapper.dir = "~/Documents/UNC/Dissertation/super prior/Analysis/R/wrapper_glm"
+source(file.path(wrapper.dir, "glm_logml_stratified_pp.R"))
+#source(file.path(wrapper.dir, "wrapper_surv.R"))
+#source(file.path(wrapper.dir, "glm_stratified_pp.R"))
+#source(file.path(wrapper.dir, "get_strata_data.R"))
+#source(file.path(wrapper.dir, "get_loglik.R"))
+```
+
+
+# Summary of Baseline Covariate
+
+
+```{r}
+## load data
+hist <- E1684
+curr <- E1690
+
+## replace 0 failure times with 0.50 days
+hist <- hist %>% mutate(failtime = if_else(failtime == 0, 0.50/365.25, failtime)) # 1 subject w/ failtime = 0
+curr <- curr %>% mutate(failtime = if_else(failtime == 0, 0.50/365.25, failtime)) # 10 subjects w/ failtime = 0
+
+#no subjects in current data w/ survtime = 0 
+
+## Center and scale age based on current data
+age_stats <- with(curr, c('mean' = mean(age), 'sd' = sd(age)))
+hist$cage <- ( hist$age - age_stats['mean'] ) / age_stats['sd']
+curr$cage <- ( curr$age - age_stats['mean'] ) / age_stats['sd']
+```
+
+
+# Frequentist Analysis
+
+```{r}
+## formula for current and historical data (Cox PH model)
+fmla     <- Surv(failtime, failcens) ~ treatment + sex + cage + node_bin
+
+## fit PWE proportional hazards models on E1684 and E1690 data using Poisson GLMs
+fit      <- coxph(formula = fmla, data = curr)
+fit.hist <- coxph(formula = fmla, data = hist)
+
+summary(fit)
+summary(fit.hist)
+```
+
+# Bayesian Analysis 
+
+We fit a proportional hazards (PH) model with a piece-wise constant baseline hazards using the equivalent Poisson likelihood. We assumed 5 intervals for the piece-wise constant baseline hazards. The cut points of these intervals were selected such that each interval consists of about the same number of events/relapses.
+
+We consider the following list of priors for analysis: the reference prior, Bayesian hierarchical model (BHM), commensurate prior, power prior, normalized power prior (NPP), latent exchangeability prior (LEAP), and propensity score-integrated power prior (PSIPP). For historical data priors, information are borrowed on both the treatment and control arms.
+
+The goal is to compare the 2-year survival probabilities between the treatment and control arm.
+
+```{r}
+results.dir <- "~/Documents/UNC/Dissertation/super prior/Analysis/Results"
+file.list   <- list.files(results.dir, pattern = '.rds')
+
+## obtain cut points for intervals
+nbreaks <- 5
+probs   <- 1:nbreaks / nbreaks
+breaks  <- curr %>%
+  filter(failcens == 1) %>%
+  reframe(quant = quantile(failtime, probs = probs)) %>%
+  unlist
+breaks  <- breaks[-nbreaks]
+```
+
+```{r}
+## functions to predict survival probability for treated and untreated groups 
+get.surv.prob.glm <- function(
+    t, 
+    post.samples,
+    data,
+    breaks
+){
+  J         = length(breaks) + 1
+  stan.data = attr(post.samples, 'data')
+  X         = stan.data$X
+  beta      = suppressWarnings(
+    as.matrix( post.samples[, colnames(X), drop=F] )
+  )
+  log_hazard = beta[, 1:J]
+  log_hazard = log_hazard[, 1] + cbind(0, log_hazard[, 2:J])
+  hazard     = exp(log_hazard) ## baseline hazards
+  
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
+  log_hazard  = log_hazard[, interval.id] ## log baseline hazard at t years
+  
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
+  
+  H          = hazard[, 1:interval.id, drop = F] %r*% interval.length 
+  if( interval.id != 1 ){
+    H          = t( apply(H, 1, cumsum) ) ## cumulative baseline hazard
+  }
+  H          = H[, interval.id] ## cumulative baseline hazard at t years
+  beta       = beta[, -(1:J)]
+  
+  X.data     = as.matrix( data[, colnames(beta)] )
+  eta.mtx    = tcrossprod(beta, X.data)
+  ## predicted t-year survival probability for each subject in data
+  S          = exp( -(H * exp(eta.mtx)))
+  
+  id.trt     = which( data$treatment == 1 )
+  id.ctl     = which( data$treatment == 0 )
+  
+  ## use Bayesian bootstrap to compute predicted t-year survival probability for subjects in the treatment and control arms
+  ## sample from dirichlet(1, 1, .., 1) distribution
+  omega.trt  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
+  omega.ctl  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
+  surv.trt   = rowSums( omega.trt * S[, id.trt])
+  surv.ctl   = rowSums( omega.ctl * S[, id.ctl])
+  return(
+    list(
+      surv.trt = surv.trt,
+      surv.ctl = surv.ctl
+    )
+  )
+}
+
+get.surv.prob.psipp <- function(
+    t, 
+    post.samples,
+    res.strata,
+    breaks
+){
+  J          = length(breaks) + 1
+  stan.data  = attr(post.samples, 'data')
+  p          = stan.data$p
+  K          = stan.data$K
+  X          = stan.data$X
+  beta       = suppressWarnings(
+    as.matrix( post.samples[, paste0( "treatment", '_stratum_', 1:K ), drop=F] )
+  )
+  
+  log_hazard = suppressWarnings(
+    as.matrix( post.samples[, paste0( colnames(X)[-which(colnames(X) == "treatment")], '_stratum_', rep(1:K, each = p-1) ), drop=F] )
+  )
+  interval_names = colnames(X)[-which(colnames(X) == "treatment")]
+  
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
+  
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
+  
+  ## compute cumulative baseline hazard at t years for each stratum
+  H = sapply(1:K, function(k){
+    log_hazard_stratum = log_hazard[, paste0(interval_names, '_stratum_', k)]
+    log_hazard_stratum = log_hazard_stratum[, 1] + cbind(0, log_hazard_stratum[, 2:J])
+    hazard_stratum     = exp(log_hazard_stratum) ## baseline hazards
+    
+    H_stratum          = hazard_stratum[, 1:interval.id, drop = F] %r*% interval.length 
+    if( interval.id != 1 ){
+      H_stratum        = t( apply(H_stratum, 1, cumsum) ) ## cumulative baseline hazard
+    }
+    H_stratum        = H_stratum[, interval.id]
+    return( H_stratum) ## cumulative baseline hazard at 2 years
+  })
+  
+  curr.psipp         = res.strata$data.list$curr
+  curr.psipp$stratum = as.integer( res.strata$strata.list[[1]] )
+  ## re-order curr.psipp by stratum
+  curr.psipp         = curr.psipp[order(curr.psipp$stratum), ]
+  ## get starting and ending indices for each strata
+  num.obs            = as.numeric( table(curr.psipp$stratum) )
+  end.idx            = cumsum(num.obs)
+  start.idx          = c(1, end.idx[-K] + 1)
+  trt.psipp          = curr.psipp[, "treatment", drop = F]
+  
+  ## predicted t-year survival probability for each subject in data
+  S = lapply(1:K, function(k){
+      H_stratum    = H[, k]
+      beta_stratum = beta[, paste0( 'treatment_stratum_', k), drop = F]
+      eta_stratum  = tcrossprod(beta_stratum, trt.psipp[ start.idx[k]:end.idx[k], ])
+      return(
+        exp( -(H_stratum * exp(eta_stratum)))
+      )
+    }
+  )
+  S = do.call(cbind, S)
+  
+  id.trt     = which( curr.psipp$treatment == 1 )
+  id.ctl     = which( curr.psipp$treatment == 0 )
+  
+  ## use Bayesian bootstrap to compute predicted 2-year survival probability for subjects in the treatment and control arms
+  ## sample from dirichlet(1, 1, .., 1) distribution
+  omega.trt  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
+  omega.ctl  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
+  surv.trt   = rowSums( omega.trt * S[, id.trt])
+  surv.ctl   = rowSums( omega.ctl * S[, id.ctl])
+  return(
+    list(
+      surv.trt = surv.trt,
+      surv.ctl = surv.ctl
+    )
+  )
+}
+
+
+## function to predict difference in 2-year survival probability between treatment and control 
+## treatment - control
+## for priors other than PSIPP
+get.surv.diff.glm <- function(
+    post.samples, 
+    data,
+    breaks
+) {
+  surv.list = get.surv.prob.glm(
+    t = 2,
+    post.samples = post.samples,
+    data = data,
+    breaks = breaks
+  )
+  surv.trt   = surv.list$surv.trt
+  surv.ctl   = surv.list$surv.ctl
+  surv.diff  = surv.trt - surv.ctl
+  return(surv.diff)
+}
+
+## for PSIPP
+get.surv.diff.psipp <- function(
+    post.samples, 
+    res.strata,
+    breaks
+) {
+  surv.list = get.surv.prob.psipp(
+    t = 2,
+    post.samples = post.samples,
+    res.strata = res.strata,
+    breaks = breaks
+  )
+  surv.trt   = surv.list$surv.trt
+  surv.ctl   = surv.list$surv.ctl
+  surv.diff  = surv.trt - surv.ctl
+  return(surv.diff)
+}
+```
+
+
+## Predicted Difference in 2-Year Survival Probabilities from Individual Priors
+
+```{r, eval=FALSE}
+surv.diff.list <- list(length = length(file.list))
+loo.list       <- list(length = length(file.list))
+logml.list     <- list(length = length(file.list))
+
+t <- seq(0, 7, length = 100)
+surv.prob.trt <- list(length = length(file.list))
+surv.prob.ctl <- list(length = length(file.list))
+
+for (i in 1:length(file.list)) {
+  res.i         <- readRDS(file.path(results.dir, file.list[i]))
+  loo.list[[i]] <- res.i$res.loo
+  logml.list[[i]] <- res.i$res.logml
+  
+  d     <- res.i$draws
+  prior <- res.i$scen$priors
+  
+  if ( prior == "psipp" ){
+    d.surv.diff <- get.surv.diff.psipp(
+      post.samples = d,
+      res.strata = res.i$res.strata,
+      breaks = breaks
+    )
+    surv.prob <- sapply(t, function(x){
+      res.surv <- get.surv.prob.psipp(
+        t = x,
+        post.samples = d,
+        res.strata = res.i$res.strata,
+        breaks = breaks
+      )
+      return(
+        c("trt" = mean(res.surv$surv.trt),
+          "ctl" = mean(res.surv$surv.ctl))
+      )
+    })
+    
+  }else{
+    d.surv.diff <- get.surv.diff.glm(
+       post.samples = d,
+       data = curr,
+       breaks = breaks
+    )
+    surv.prob <- sapply(t, function(x){
+      res.surv <- get.surv.prob.glm(
+        t = x,
+        post.samples = d,
+        data = curr,
+        breaks = breaks
+      )
+      return(
+        c("trt" = mean(res.surv$surv.trt),
+          "ctl" = mean(res.surv$surv.ctl))
+      )
+    })
+  
+  }
+  
+  surv.diff.list[[i]] <- d.surv.diff
+  surv.prob.trt[[i]]  <- surv.prob["trt", ]
+  surv.prob.ctl[[i]]  <- surv.prob["ctl", ]
+  
+  estim.i <- round(c(mean = mean(d.surv.diff), sd = sd(d.surv.diff), quantile2(d.surv.diff, probs = c(0.5, 0.025, 0.975))), 3)
+  prior.i <- prior
+  if( i == 1 ){
+    estim <- estim.i
+    priors <- prior.i
+  }else{
+    estim <- rbind(estim, estim.i)
+    priors <- c(priors, prior.i)
+  }
+  print( paste0("######################## Completed iteration ", i, "######################## "))
+  temp <- list(
+    loo.list = loo.list,
+    surv.diff.list = surv.diff.list,
+    surv.prob.ctl = surv.prob.ctl,
+    surv.prob.trt = surv.prob.trt,
+    logml.list = logml.list,
+    estim = estim,
+    priors = priors
+  )
+  saveRDS(temp, 
+          "~/Documents/UNC/Dissertation/super prior/Analysis/R/compiled_analysis_results.rds")
+}
+```
+
+
+```{r}
+res <- readRDS(file = "~/Documents/UNC/Dissertation/super prior/Analysis/R/compiled_analysis_results.rds")
+loo.list <- res$loo.list
+surv.diff.list <- res$surv.diff.list
+surv.prob.ctl <- res$surv.prob.ctl
+surv.prob.trt <- res$surv.prob.trt
+logml.list <- res$logml.list
+estim <- res$estim
+priors <- res$priors
+
+estim <- as.data.frame(estim)
+estim <- cbind(prior = priors, estim) %>%
+  as.data.frame()
+rownames(estim) <- NULL
+estim
+```
+
+
+## Weights from model-averaging priors
+
+```{r}
+## BMA weights
+logml.vals <- lapply(logml.list, function(l){
+  l$logml
+})
+logml.vals <- unlist(logml.vals)
+post.prob <- bridgesampling::post_prob(logml.vals)
+
+
+lpd_point  <- sapply(loo.list, function(l){
+    l$pointwise[,"elpd_loo"]
+})
+
+pbma_wts     <- pseudobma_weights(lpd_point, BB=FALSE)
+pbma_BB_wts  <- pseudobma_weights(lpd_point) # default is BB=TRUE
+stacking_wts <- stacking_weights(lpd_point)
+
+wts.tab <- data.frame(
+  prior = estim$prior,
+  "BMA" = round(post.prob, 3),
+  "Pseudo-BMA" = round(pbma_wts, 3),
+  "Pseudo-BMA w/ BB" = round(pbma_BB_wts, 3),
+  "Stacking" = round(stacking_wts, 3)
+)
+rownames(wts.tab) <- NULL
+colnames(wts.tab)[3:4] <- c("Pseudo-BMA", "Pseudo-BMA w/ BB")
+wts.tab
+```
+
+
+## Predicted Difference in 2-Year Survival Probabilities from All Methods
+
+```{r}
+d.surv.diff.mtx <- do.call(cbind, surv.diff.list)
+
+sample.model.avg.prior = function(wts, samples.mtx = d.surv.diff.mtx){
+  wts <- as.numeric(wts)
+  ## draw n i.i.d. samples (c0) from categorical distribution with probability
+  ## being posterior model probabilities
+  c0 <- sample(x = seq_len(ncol(samples.mtx)), size = nrow(samples.mtx), replace = T,
+               prob = wts)
+  
+  models <- unique(c0)
+  res.samples <- lapply(models, function(j){
+    nsample = sum(c0 == j)
+    return( sample(samples.mtx[, j], size = nsample, replace = T) )
+  })
+  res.samples <- unlist(res.samples)
+  return(res.samples)
+}
+
+
+d.surv.diff.bma      <- sample.model.avg.prior(wts = post.prob)
+d.surv.diff.pbma     <- sample.model.avg.prior(wts = pbma_wts)
+d.surv.diff.pbma.BB  <- sample.model.avg.prior(wts = pbma_BB_wts)
+d.surv.diff.stacking <- sample.model.avg.prior(wts = stacking_wts)
+
+
+estim2 <- lapply(list(d.surv.diff.bma, d.surv.diff.pbma, d.surv.diff.pbma.BB, d.surv.diff.stacking), function(l){
+  round(c(mean = mean(l), sd = sd(l), quantile2(l, probs = c(0.5, 0.025, 0.975))), 3)
+})
+estim2 <- do.call(rbind, estim2) %>%
+  as.data.frame()
+estim2 <- cbind(
+  prior = c("BMA", "Pseudo-BMA", "Pseudo-BMA w/ BB", "Stacking"),
+  estim2
+) %>% as.data.frame()
+
+estim_all <- rbind(estim, estim2) %>% as.data.frame()
+estim_all
+```
+
+```{r}
+estim_all[!estim_all$prior %in% c("Pseudo-BMA", "Pseudo-BMA w/ BB"), ]
+```
+
+## Posterior Density Plot
+
+```{r}
+surv_diff_df <- cbind(d.surv.diff.mtx, d.surv.diff.bma, d.surv.diff.stacking)
+colnames(surv_diff_df) <- c(estim$prior, "bma", "stacking")
+surv_diff_df <- as.data.frame(surv_diff_df)
+surv_diff_df_long <- surv_diff_df %>%
+  pivot_longer(
+    cols = all_of(colnames(surv_diff_df)),
+    names_to = "model",
+    values_to = "estimate"
+  )
+surv_diff_df_long$model <- factor(surv_diff_df_long$model,
+                                  levels = c("ref", "bhm", "commensurate", "leap", "npp",
+                                             "pp_0.5", "psipp", "bma", "stacking"),
+                                  ordered = T)
+
+library(ggplot2)
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(surv_diff_df_long %>%
+         filter(model %in% c("ref", "bhm", "commensurate", "leap", "npp", "psipp", "pp_0.5")), aes(x=estimate, col = model)) +
+  geom_density() +
+  scale_colour_manual(values= c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#CC79A7", "#D55E00")) +
+  labs(title = "Posterior Density of Predicted Difference in 2-Year Survival Probabilities")
+
+ggplot(surv_diff_df_long %>%
+         filter(model %in% c("bma", "stacking")), aes(x=estimate, col = model)) +
+  geom_density() +
+  scale_colour_manual(values= c("#CC79A7", "orange")) +
+  labs(title = "Posterior Density of Predicted Difference in 2-Year Survival Probabilities")
+
+
+ggplot(surv_diff_df_long %>%
+         filter(model %in% c("ref", "commensurate", "psipp", "stacking")), aes(x=estimate, col = model)) +
+  geom_density() +
+  scale_colour_manual(values= c("#999999", "#56B4E9", "#CC79A7", "orange")) +
+  labs(title = "Posterior Density of Predicted Difference in 2-Year Survival Probabilities")
+
+ggplot(surv_diff_df_long %>%
+         filter(model %in% c("leap", "commensurate")), aes(x=estimate, col = model)) +
+  geom_density() +
+  scale_colour_manual(values= c("#999999", "#56B4E9", "#CC79A7", "orange")) +
+  labs(title = "Posterior Density of Predicted Difference in 2-Year Survival Probabilities")
+
+
+```
+
+
+## Predicted Survival Probabilities
+
+```{r}
+t <- seq(0, 7, length = 100)
+
+surv.prob.ctl.long <- lapply(1:length(priors), function(i){
+  df = cbind(prob = surv.prob.ctl[[i]], trt = 0, time = t) %>% as.data.frame()
+  df$priors = priors[[i]]
+  return(df)
+})
+surv.prob.ctl.long <- do.call(rbind, surv.prob.ctl.long)
+
+surv.prob.trt.long <- lapply(1:length(priors), function(i){
+  df = cbind(prob = surv.prob.trt[[i]], trt = 1, time = t) %>% as.data.frame()
+  df$priors = priors[[i]]
+  return(df)
+})
+surv.prob.trt.long <- do.call(rbind, surv.prob.trt.long)
+
+surv.prob <- rbind(surv.prob.ctl.long, surv.prob.trt.long) %>% as.data.frame()
+surv.prob$trt <- as.factor(surv.prob$trt)
+
+surv.prob %>%
+  ggplot(aes(x = time, y = prob, color = trt)) +
+  geom_line() +
+  #geom_point() +
+  labs(x = 'time') +
+  facet_wrap(~priors) +
+  labs(title = "Predicted Survival Probabilities") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+## Predicted Survival Probabilities for PSIPP per Stratum
+
+```{r}
+res.psipp <- readRDS(file.path(results.dir, "PWE_id_45_psipp_nintervals_5.rds"))
+
+get.surv.prob.psipp.stratum <- function(
+    t, 
+    post.samples,
+    res.strata,
+    breaks
+){
+  J          = length(breaks) + 1
+  stan.data  = attr(post.samples, 'data')
+  p          = stan.data$p
+  K          = stan.data$K
+  X          = stan.data$X
+  beta       = suppressWarnings(
+    as.matrix( post.samples[, paste0( "treatment", '_stratum_', 1:K ), drop=F] )
+  )
+  
+  log_hazard = suppressWarnings(
+    as.matrix( post.samples[, paste0( colnames(X)[-which(colnames(X) == "treatment")], '_stratum_', rep(1:K, each = p-1) ), drop=F] )
+  )
+  interval_names = colnames(X)[-which(colnames(X) == "treatment")]
+  
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
+  
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
+  
+  ## compute cumulative baseline hazard at t years for each stratum
+  H = sapply(1:K, function(k){
+    log_hazard_stratum = log_hazard[, paste0(interval_names, '_stratum_', k)]
+    log_hazard_stratum = log_hazard_stratum[, 1] + cbind(0, log_hazard_stratum[, 2:J])
+    hazard_stratum     = exp(log_hazard_stratum) ## baseline hazards
+    
+    H_stratum          = hazard_stratum[, 1:interval.id, drop = F] %r*% interval.length 
+    if( interval.id != 1 ){
+      H_stratum        = t( apply(H_stratum, 1, cumsum) ) ## cumulative baseline hazard
+    }
+    H_stratum        = H_stratum[, interval.id]
+    return( H_stratum) ## cumulative baseline hazard at 2 years
+  })
+  
+  curr.psipp         = res.strata$data.list$curr
+  curr.psipp$stratum = as.integer( res.strata$strata.list[[1]] )
+  ## re-order curr.psipp by stratum
+  curr.psipp         = curr.psipp[order(curr.psipp$stratum), ]
+  ## get starting and ending indices for each strata
+  num.obs            = as.numeric( table(curr.psipp$stratum) )
+  end.idx            = cumsum(num.obs)
+  start.idx          = c(1, end.idx[-K] + 1)
+  trt.psipp          = curr.psipp[, "treatment", drop = F]
+  
+  ## predicted t-year survival probability for each subject in data
+  S = lapply(1:K, function(k){
+      H_stratum    = H[, k]
+      beta_stratum = beta[, paste0( 'treatment_stratum_', k), drop = F]
+      eta_stratum  = tcrossprod(beta_stratum, trt.psipp[ start.idx[k]:end.idx[k], ])
+      return(
+        exp( -(H_stratum * exp(eta_stratum)))
+      )
+    }
+  )
+  ## use Bayesian bootstrap to compute predicted t-year survival probability for subjects in the treatment and control arms for each stratum
+  surv.stratum <- lapply(1:K, function(k){
+    curr.psipp.stratum =  curr.psipp %>%
+      filter(stratum == k)
+    S_stratum  = S[[k]]
+    
+    id.trt     = which( curr.psipp.stratum$treatment == 1 )
+    id.ctl     = which( curr.psipp.stratum$treatment == 0 )
+    
+    omega.trt  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
+    omega.ctl  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
+  
+    surv.trt   = rowSums( omega.trt * S_stratum[, id.trt])
+    surv.ctl   = rowSums( omega.ctl * S_stratum[, id.ctl])
+    return(
+        data.frame("trt" = mean(surv.trt),
+          "ctl" = mean(surv.ctl),
+          "stratum" = k)
+      )
+  })
+  surv.stratum <- do.call(rbind, surv.stratum)
+  return(surv.stratum)
+}
+
+time <- seq(0, 7, length = 100)
+surv.prob.stratum <- lapply(time, function(x){
+  df = get.surv.prob.psipp.stratum(
+    t = x,
+    post.samples = res.psipp$draws,
+    res.strata = res.psipp$res.strata,
+    breaks = breaks
+  )
+  df$time = x
+  return(df)
+})
+surv.prob.stratum <- do.call(rbind, surv.prob.stratum)
+
+surv.prob %>%
+  ggplot(aes(x = time, y = prob, color = trt)) +
+  geom_line() +
+  #geom_point() +
+  labs(x = 'time') +
+  facet_wrap(~priors) +
+  labs(title = "Predicted Survival Probabilities") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
