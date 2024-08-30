@@ -10,71 +10,134 @@ design.mtx.curr <- mle.list$design.mtx.curr
 design.mtx.hist <- mle.list$design.mtx.hist
 rm(mle.list)
 
-## tdens: density function of survival times
+
+#' density function of a Weibull(alpha, lambda) distribution:
+#' f(y) = alpha * y^{alpha - 1} * gamma * exp{-gamma * y^{alpha}}, where lambda = log(gamma)
+#'
+#' @param t
+#' @param alpha         shape parameter, same as `shape` in [stats::rweibull()].
+#' @param lambda        exp(-`lambda` / `alpha` ) is the `scale` parameter in [stats::rweibull()].
+#' @param log           logical; if TRUE, log density is returned. Defaults to FALSE.
+tdens.weibull <- function(
+    t,
+    alpha,
+    lambda,
+    log = FALSE
+){
+  res   <- log(alpha) + (alpha - 1) * log(t) + lambda - exp(lambda) * t^alpha
+  if ( !log )
+    res <- exp(res)
+  return(res)
+}
+
+
+#' function to compute the optimal exponential rate to achieve the desired censoring proportion
+#' assume event time follows a Weibull distribution as specified in `tdens.fun`
+#' assume censoring time follows a exponential distribution
+#'
+#' @param alpha         shape parameter, same as `shape` in [stats::rweibull()].
+#' @param lambda        exp(-`lambda` / `alpha` ) is the `scale` parameter in [stats::rweibull()].
+#' @param prop.cens     desired censoring proportion
+#' @param tdens.fun     density function of event time. Defaults to the Weibull distribution.
+#' @examples
+#' alpha <- 1.1
+#' lambda <- log(3.5)
+#' t <- rweibull(10000, shape = alpha, scale = exp(-lambda/alpha))
+#' x <- get.cens.rate(alpha = alpha, lambda = lambda, prop.cens = 0.35)
+#' c <- rexp(10000, rate = x)
+#' mean(c < t) # should be around 0.35
+#'
 get.cens.rate <- function(
-    tdens, prop.cens = 0.30
+    alpha,
+    lambda,
+    prop.cens,
+    tdens.fun = tdens.weibull
 ) {
   optfun <- function(x) {
-    f       <- function(t) { exp( log( tdens(t) ) - x * t ) }
+    f       <- function(t){
+      tdens.fun(t = t, alpha = alpha, lambda = lambda) * ( 1 - exp(-x * t) )
+    }
     cenprop <- integrate(f, 0, Inf)$value
     abs(cenprop - prop.cens)
   }
   optimize(optfun, interval = c(0.01, 1000))$minimum
 }
 
-#' function to simulate time-to-event data from a Weibull AFT model
-#' assume censoring time ~ exponential distribution and uniform accrual
+
+#' function to simulate time-to-event data from a Weibull accelerated failure time (AFT) model
+#' assume censoring time ~ exponential distribution with the rate parameter being determined based on
+#' the desired censoring proportion.
 #'
-#' @param X             design matrix w/ column names being intercept/variable names
-#' @param mle           MLEs of scale parameter and regression coefficients from fitting Weibull AFT
-#'                      model on current/historical data
-#' @param accrual.max   maximum accrual time
-#' For E1690 study, the accrual time was from February 1991 to June 1, 1995 (52/12 years),
-#' and the presently analyzed database was current to September 1998
-#' @param min.follow.up minimum follow up time for each subject, default is 3
-#' @param censor.rate   censoring rate, default is log(0.95)/(-5)
-#' @return data.frame with observed event time, event indicator, and covariates
+#'
+#' @param X             design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X` will be used as
+#'                      the covariates for simulated data.
+#' @param theta         a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data.
+#' @param prop.cens     desired censoring proportion
+#' @param nevents       desired number of events
+#' @param trt.prob      probability of being assigned to the treated group. The treatment indicator
+#'                      for simulated data will be generated using Bernoulli distribution with probability
+#'                      being `trt.prob`. Defaults to 0.5.
+#'
+#' @return
+#'  a data.frame with observed event time, event indicator, treatment indicator, and covariates.
+#'
+#' @examples
+#' df <- get.weibull.surv(
+#'   X         = design.mtx.curr,
+#'   theta     = mle.curr,
+#'   prop.cens = 0.2,
+#'   nevents   = 200,
+#'   trt.prob  = 0.5
+#' )
+#' mean(1 - df$failcens) # should be around 0.2
+#' # plot KM curve
+#' fit  <- survfit(Surv(failtime, failcens) ~ treatment , data = df)
+#' survminer::ggsurvplot(fit, data = df)
+#'
 get.weibull.surv <- function(
     X,
-    mle,
-    accrual.max = 52/12,
-    min.follow.up = 3,
-    censor.rate = -log(0.95)/5 # solved from exp{-5x}=0.95, 5% subjects be censored at 5 years
+    theta,
+    prop.cens,
+    nevents,
+    trt.prob = 0.5
 ){
   X        <- as.matrix(X)
-  n        <- nrow(X)
-  sigma    <- exp(mle[1])  # MLE of scale parameter
-  beta     <- mle[-1] # MLE of regression coefficients
-  eta      <- X %*% beta
+  n        <- ceiling( nevents / (1 - prop.cens) )
+  # take bootstrap samples from X
+  idx      <- sample(1:nrow(X), size = n, replace = T)
+  X.new    <- X[idx, ]
 
-  # generate accrual time for each subject
-  accrual.time     <- runif(n, min = 0, max = accrual.max)
-  # administered censor time (the last subject enrolled in study will be observed for min.follow.up years)
-  elapsed.time.max <- max(accrual.time) + min.follow.up
+  # generate treatment indicator
+  X.new[, which(colnames(X.new) == "treatment")] <- rbinom(n, 1, trt.prob)
+
+  sigma    <- as.numeric( exp(theta[1]) )  # MLE of sigma
+  beta     <- as.numeric( theta[-1] ) # MLE of regression coefficients
+  eta      <- as.numeric( X.new %*% beta )
+
+  # generate event time t from a Weibull distribution
+  # shape = alpha = 1/sigma, scale = exp(-lambda / alpha), where lambda = -x'beta/sigma
+  t        <- rweibull(n, shape = 1/sigma, scale = exp(eta))
+
+  # compute the appropriate censoring rate to achieve the desired censoring proportion
+  alpha       <- 1/sigma
+  lambda      <- -eta/sigma
+  censor.rate <- sapply(lambda, function(z){
+    get.cens.rate(alpha = alpha, lambda = z, prop.cens = prop.cens)
+  })
   # generate censoring time using exponential distribution with rate = censor.rate
-  censor.time      <- rexp(n, rate = censor.rate)
+  censor.time <- rexp(n = n, rate = censor.rate)
 
-  # generate failure/event time t from a Weibull distribution
-  t <- rweibull(n, shape = 1/sigma, scale = exp(eta))
-
-  # complete data observation time and event indicator
+  # compute observation time and event indicator
   observed.time <- pmin(t, censor.time)
   eventind      <- as.numeric(t <= censor.time)
 
-  ## the complete data elapsed time
-  elapsed.time  <- accrual.time + observed.time
-
-  ## if the elapsed time for a subject is larger than the administered censor time,
-  ## then the observed time is set to be (administered censor time - accrual time) and the event indicator is set to 0
-  idx                <- (elapsed.time > elapsed.time.max)
-  observed.time[idx] <- elapsed.time.max - (accrual.time[idx])
-  eventind[idx]      <- 0
-
-  if( "(Intercept)" %in% colnames(X) ) {
-    X <- X[, !colnames(X) %in% "(Intercept)", drop = F]
+  if( "(Intercept)" %in% colnames(X.new) ) {
+    X.new <- X.new[, !colnames(X.new) %in% "(Intercept)", drop = F]
   }
-  df           <- cbind(observed.time, eventind, X)
-  colnames(df) <- c('failtime', 'failcens', colnames(X))
+  df           <- cbind(observed.time, eventind, X.new)
+  colnames(df) <- c('failtime', 'failcens', colnames(X.new))
   df           <- as.data.frame(df)
   return(df)
 }
@@ -90,13 +153,10 @@ get.weibull.surv <- function(
 #' @param mle           MLEs of scale parameter and regression coefficients from fitting Weibull AFT
 #'                      model on current data
 sim.PP <- function(
-    n,
-    n0,
+    prop.cens,
+    nevent,
     X             = design.mtx.curr,
-    mle           = mle.curr,
-    accrual.max   = 52/12,
-    min.follow.up = 3,
-    censor.rate   = -log(0.95)/5 # solved from exp{-5x}=0.95, 5% subjects be censored at 5 years
+    mle           = mle.curr
 ){
   # take bootstrap samples from current data
   idx       <- sample(1:nrow(X), size = n + n0, replace = T)
