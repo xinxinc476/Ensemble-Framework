@@ -194,7 +194,7 @@ sim.PP <- function(
 }
 
 
-#' function to simulate data under the commensurate assumption
+#' function to simulate data under the BHM assumption
 #' generate current data set using `theta` and bootstrap samples from `X`
 #' generate historical data set using theta0 ~ N(theta, theta.sd) and bootstrap samples from `X`
 #'
@@ -212,7 +212,7 @@ sim.PP <- function(
 #'                      for simulated data will be generated using Bernoulli distribution with probability
 #'                      being `trt.prob`. Defaults to 0.5.
 #'
-sim.CP <- function(
+sim.BHM <- function(
     prop.cens,
     nevents,
     n0events,
