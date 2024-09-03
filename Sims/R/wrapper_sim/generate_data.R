@@ -79,6 +79,9 @@ get.cens.rate <- function(
 #' @param trt.prob      probability of being assigned to the treated group. The treatment indicator
 #'                      for simulated data will be generated using Bernoulli distribution with probability
 #'                      being `trt.prob`. Defaults to 0.5.
+#' @param bootstrap     whether to take bootstrap samples from `X` with replacement and generate treatment
+#'                      indicators. If FALSE, `X` will be used as the design matrix for new data, and
+#'                      arguments like `nevents` and `trt.prob` are not used. Defaults to TRUE.
 #'
 #' @return
 #'  a data.frame with observed event time, event indicator, treatment indicator, and covariates.
@@ -89,7 +92,8 @@ get.cens.rate <- function(
 #'   theta     = mle.curr,
 #'   prop.cens = 0.2,
 #'   nevents   = 200,
-#'   trt.prob  = 0.5
+#'   trt.prob  = 0.5,
+#'   bootstrap = TRUE
 #' )
 #' mean(1 - df$failcens) # should be around 0.2
 #' # plot KM curve
@@ -101,16 +105,22 @@ get.weibull.surv <- function(
     theta,
     prop.cens,
     nevents,
-    trt.prob = 0.5
+    trt.prob = 0.5,
+    bootstrap = TRUE
 ){
   X        <- as.matrix(X)
-  n        <- ceiling( nevents / (1 - prop.cens) )
-  # take bootstrap samples from X
-  idx      <- sample(1:nrow(X), size = n, replace = T)
-  X.new    <- X[idx, ]
+  if( bootstrap ){
+    n        <- ceiling( nevents / (1 - prop.cens) )
+    # take bootstrap samples from X
+    idx      <- sample(1:nrow(X), size = n, replace = T)
+    X.new    <- X[idx, ]
 
-  # generate treatment indicator
-  X.new[, which(colnames(X.new) == "treatment")] <- rbinom(n, 1, trt.prob)
+    # generate treatment indicator
+    X.new[, which(colnames(X.new) == "treatment")] <- rbinom(n, 1, trt.prob)
+  }else{
+    n     <- nrow(X)
+    X.new <- X
+  }
 
   sigma    <- as.numeric( exp(theta[1]) )  # MLE of sigma
   beta     <- as.numeric( theta[-1] ) # MLE of regression coefficients
@@ -173,7 +183,8 @@ sim.PP <- function(
     theta = theta,
     prop.cens = prop.cens,
     nevents = nevents + n0events,
-    trt.prob = trt.prob
+    trt.prob = trt.prob,
+    bootstrap = TRUE
   )
 
   data      <- df.all[(1:n), ]
@@ -183,9 +194,9 @@ sim.PP <- function(
 }
 
 
-#' function to simulate data under the BHM assumption
-#' generate current data set using `theta` and bootstrap samples from X
-#' generate historical data set using theta0 ~ N(theta, theta.sd) and bootstrap samples from X
+#' function to simulate data under the commensurate assumption
+#' generate current data set using `theta` and bootstrap samples from `X`
+#' generate historical data set using theta0 ~ N(theta, theta.sd) and bootstrap samples from `X`
 #'
 #' @param prop.cens     desired censoring proportion
 #' @param nevents       desired number of events in simulated current data
@@ -196,12 +207,12 @@ sim.PP <- function(
 #' @param theta         a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
 #'                      from fitting a Weibull AFT model on current/historical data.
 #' @param theta.sd      standard deviation of the normal distribution from which the MLEs used to simulate
-#'                      the historical data are drawn.
+#'                      the historical data are drawn. Defaults to 0.2.
 #' @param trt.prob      probability of being assigned to the treated group. The treatment indicator
 #'                      for simulated data will be generated using Bernoulli distribution with probability
 #'                      being `trt.prob`. Defaults to 0.5.
 #'
-sim.BHM <- function(
+sim.CP <- function(
     prop.cens,
     nevents,
     n0events,
@@ -215,7 +226,8 @@ sim.BHM <- function(
     theta = theta,
     prop.cens = prop.cens,
     nevents = nevents,
-    trt.prob = trt.prob
+    trt.prob = trt.prob,
+    bootstrap = TRUE
   )
 
   theta0    <- rnorm(n = length(theta), mean = theta, sd = theta.sd)
@@ -224,7 +236,8 @@ sim.BHM <- function(
     theta = theta0,
     prop.cens = prop.cens,
     nevents = n0events,
-    trt.prob = trt.prob
+    trt.prob = trt.prob,
+    bootstrap = TRUE
   )
   data.list <- list(curr = data, hist = histdata)
   return(data.list)
@@ -232,64 +245,79 @@ sim.BHM <- function(
 
 
 #' function to simulate data under the LEAP assumption
-#' generate current data set using mle.curr
-#' generate each observation in historical data set using mle.curr & X if tau = 1 and
-#' using mle.hist & X0 if tau = 0, where tau ~ Bernoulli with probability = exch
-#' (i.e., about exch*100 percent of subjects historical data are exchangeable with those in current data)
+#' generate current data set using `theta` and bootstrap samples from `X`
+#' generate historical data set such that about `exch` of observations are generated using `theta` and
+#' bootstrap samples from `X` while the rest observations are generated using `theta0` and bootstrap
+#' samples from `X0`
+#' (i.e., about `exch`*100 percent of subjects in historical data are exchangeable with those in current data)
 #'
-#' @param n             sample size of generated current data
-#' @param n0            sample size of generated historical data
-#' @param X             current data (E1690) design matrix, w/ column names being intercept/variable names
-#' @param X0            historical data (E1684) design matrix, w/ column names being intercept/variable names
+#' @param prop.cens     desired censoring proportion
+#' @param nevents       desired number of events in simulated current data
+#' @param n0events      desired number of events in simulated historical data
+#' @param X             design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X` will be used as
+#'                      the covariates for simulated current and `exch`*100 percent of historical data.
+#'                      Defaults to design matrix from E1690 data.
+#' @param X0            design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X0` will be used as
+#'                      the covariates for simulated `(1 - exch)`*100 percent of historical data.
+#'                      Defaults to design matrix from E1684 data.
+#' @param theta         a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data. `theta` will be
+#'                      used for simulating current and `exch`*100 percent of historical data.
+#' @param theta0        a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data. `theta0` will be
+#'                      used for simulating `(1 - exch)`*100 percent of historical data.
 #' @param exch          probability of subjects in historical data being exchangeable with those in
-#'                      current data
-#' @param mle           MLEs of scale parameter and regression coefficients from fitting Weibull AFT
-#'                      model on current data
-#' @param mle0          MLEs of scale parameter and regression coefficients from fitting Weibull AFT
-#'                      model on historical data
+#'                      current data.
+#' @param trt.prob      probability of being assigned to the treated group. The treatment indicator
+#'                      for simulated data will be generated using Bernoulli distribution with probability
+#'                      being `trt.prob`. Defaults to 0.5.
+#'
 sim.LEAP <- function(
-    n,
-    n0,
+    prop.cens,
+    nevents,
+    n0events,
     X             = design.mtx.curr,
     X0            = design.mtx.hist,
+    theta         = mle.curr,
+    theta0        = mle.hist,
     exch          = 0.5,
-    mle           = mle.curr,
-    mle0          = mle.hist,
-    accrual.max   = 52/12,
-    min.follow.up = 3,
-    censor.rate   = -log(0.95)/5 # solved from exp{-5x}=0.95, 5% subjects be censored at 5 years
+    trt.prob      = 0.5
 ){
-  # take bootstrap samples from current data
-  idx       <- sample(1:nrow(X), size = n, replace = T)
   data      <- get.weibull.surv(
-    X = X[idx, ],
-    mle = mle,
-    accrual.max = accrual.max,
-    min.follow.up = min.follow.up,
-    censor.rate = censor.rate
+    X = X,
+    theta = theta,
+    prop.cens = prop.cens,
+    nevents = nevents,
+    trt.prob = trt.prob,
+    bootstrap = TRUE
   )
+
+  # generate historical data using theta & X
+  histdata1 <- get.weibull.surv(
+    X = X,
+    theta = theta,
+    prop.cens = prop.cens,
+    nevents = n0events,
+    trt.prob = trt.prob,
+    bootstrap = TRUE
+  )
+  # generate historical data using theta0 & X0
+  histdata2 <- get.weibull.surv(
+    X = X0,
+    theta = theta0,
+    prop.cens = prop.cens,
+    nevents = n0events,
+    trt.prob = trt.prob,
+    bootstrap = TRUE
+  )
+  n0        <- nrow(histdata1)
 
   # generate n0 Bernoulli random variables
   tau       <- rbinom(n0, size = 1, prob = exch)
-  # generate historical data using mle & X for subjects with tau = 1
-  idx01     <- sample(1:nrow(X), size = sum(tau), replace = T)
-  histdata1 <- get.weibull.surv(
-    X = X[idx01, ],
-    mle = mle,
-    accrual.max = accrual.max,
-    min.follow.up = min.follow.up,
-    censor.rate = censor.rate
-  )
-  # generate historical data using mle0 & X0 for subjects with tau = 0
-  idx00     <- sample(1:nrow(X0), size = n0 - sum(tau), replace = T)
-  histdata0 <- get.weibull.surv(
-    X = X0[idx00, ],
-    mle = mle0,
-    accrual.max = accrual.max,
-    min.follow.up = min.follow.up,
-    censor.rate = censor.rate
-  )
-  histdata  <- rbind(histdata1, histdata0) %>%
+  # generate historical data based on tau
+  histdata  <- rbind(histdata1[which(tau == 1), ], histdata2[which(tau == 0), ]) %>%
     as.data.frame()
   data.list <- list(curr = data, hist = histdata)
   return(data.list)
@@ -297,84 +325,108 @@ sim.LEAP <- function(
 
 
 #' function to simulate data under the unexchangeable assumption
-#' generate current data set using mle.curr and bootstrap samples from X
-#' generate historical data set using -mle.curr and bootstrap samples from X0
+#' equivalent to simulate under LEAP assumption with `exch` = 0
 #'
-#' @param n             sample size of generated current data
-#' @param n0            sample size of generated historical data
-#' @param X             current data (E1690) design matrix, w/ column names being intercept/variable names
-#' @param X0            historical data (E1684) design matrix, w/ column names being intercept/variable names
-#' @param mle           MLEs of scale parameter and regression coefficients from fitting Weibull AFT
-#'                      model on current data
+#' @param prop.cens     desired censoring proportion
+#' @param nevents       desired number of events in simulated current data
+#' @param n0events      desired number of events in simulated historical data
+#' @param X             design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X` will be used as
+#'                      the covariates for simulated current data. Defaults to design matrix from
+#'                      E1690 data.
+#' @param X0            design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X0` will be used as
+#'                      the covariates for simulated historical data. Defaults to design matrix from
+#'                      E1684 data.
+#' @param theta         a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data. `theta` will be
+#'                      used for simulating current data.
+#' @param theta0        a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data. `theta0` will be
+#'                      used for simulating historical data.
+#' @param trt.prob      probability of being assigned to the treated group. The treatment indicator
+#'                      for simulated data will be generated using Bernoulli distribution with probability
+#'                      being `trt.prob`. Defaults to 0.5.
+#'
 sim.UNEXCH <- function(
-    n,
-    n0,
+    prop.cens,
+    nevents,
+    n0events,
     X             = design.mtx.curr,
     X0            = design.mtx.hist,
-    mle           = mle.curr,
-    accrual.max   = 52/12,
-    min.follow.up = 3,
-    censor.rate   = -log(0.95)/5 # solved from exp{-5x}=0.95, 5% subjects be censored at 5 years
+    theta         = mle.curr,
+    theta0        = mle.hist,
+    trt.prob      = 0.5
 ){
-  # take bootstrap samples from current data
-  idx       <- sample(1:nrow(X), size = n, replace = T)
-  data      <- get.weibull.surv(
-    X = X[idx, ],
-    mle = mle,
-    accrual.max = accrual.max,
-    min.follow.up = min.follow.up,
-    censor.rate = censor.rate
+  # equivalent to simulate under LEAP assumption with `exch` = 0
+  data.list <- sim.LEAP(
+    prop.cens = prop.cens,
+    nevents   = nevents,
+    n0events  = n0events,
+    X         = X,
+    X0        = X0,
+    theta     = theta,
+    theta0    = theta0,
+    exch      = 0,
+    trt.prob  = trt.prob
   )
-
-  # take bootstrap samples from historical data
-  idx0      <- sample(1:nrow(X0), size = n0, replace = T)
-  histdata  <- get.weibull.surv(
-    X = X0[idx0, ],
-    mle = -mle,
-    accrual.max = accrual.max,
-    min.follow.up = min.follow.up,
-    censor.rate = censor.rate
-  )
-  data.list <- list(curr = data, hist = histdata)
   return(data.list)
 }
 
 
 #' function to simulate data under the PSIPP assumption
-#' generate current data set using mle.curr
-#' generate historical data set using mle.curr and X if tau = 1 and using mle.hist and X0 if tau = 0,
-#' where tau ~ Bernoulli with probability = exch
+#' generate covariates for simulated current data by taking bootstrap samples of `X`
+#' generate covariates for simulated historical data by taking bootstrap samples of `X0`
+#' estimate the propensity scores (PS) via a logistic regression and assign subjects into different strata
+#' based on PS
+#' for each stratum, generate survival outcomes using `theta` with some drift in the regression coefficients
 #'
-#' @param n             sample size of generated current data
-#' @param n0            sample size of generated historical data
-#' @param X             current data (E1690) design matrix, w/ column names being intercept/variable names
-#' @param X0            historical data (E1684) design matrix, w/ column names being intercept/variable names
-#' @param mle           MLEs of scale parameter and regression coefficients from fitting Weibull AFT
-#'                      model on current data
-#' @param dev.mle.beta  deviation of the true regression coefficient values from `mle` for each stratum
+#' @param prop.cens     desired censoring proportion
+#' @param nevents       desired number of events in simulated current data
+#' @param n0events      desired number of events in simulated historical data
+#' @param X             design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X` will be used as
+#'                      the covariates for simulated current data. Defaults to design matrix from
+#'                      E1690 data.
+#' @param X0            design matrix w/ column names being "(intercept)", "treatment", and covariate
+#'                      names (if any). Bootstrap samples from the covariates of `X0` will be used as
+#'                      the covariates for simulated historical data. Defaults to design matrix from
+#'                      E1684 data.
+#' @param theta         a vector of log(scale) parameter and regression coefficients, e.g., the MLEs
+#'                      from fitting a Weibull AFT model on current/historical data. `theta` will be
+#'                      used for simulating current data.
+#' @param drift.beta    deviation/drift of each true regression coefficient value from the corresponding
+#'                      element of `theta` within each stratum.
 #'
 sim.PSIPP <- function(
-    n,
-    n0,
+    prop.cens,
+    nevents,
+    n0events,
     X             = design.mtx.curr,
     X0            = design.mtx.hist,
     ps.formula    = ~ sex + cage + node_bin,
-    nStrata       = 4,
-    mle           = mle.curr,
-    dev.mle.beta  = c(-0.2, -0.1, 0.1, 0.2),
-    accrual.max   = 52/12,
-    min.follow.up = 3,
-    censor.rate   = -log(0.95)/5 # solved from exp{-5x}=0.95, 5% subjects be censored at 5 years
+    nStrata       = 3,
+    theta         = mle.curr,
+    drift.beta    = c(-0.1, 0, 0.1),
+    trt.prob      = 0.5
 ){
-  # take bootstrap samples from current data
-  idx       <- sample(1:nrow(X), size = n, replace = T)
-  X.new     <- X[idx, ]
-  # take bootstrap samples from historical data
-  idx0      <- sample(1:nrow(X0), size = n0, replace = T)
-  X0.new    <- X0[idx0, ]
-  X.PS      <- rbind(X.new, X0.new)
-  study     <- rep(c(1, 0), times = c(n, n0))
-  df.PS     <- cbind(study = study, X.PS) %>%
+  n        <- ceiling( nevents / (1 - prop.cens) )
+  # take bootstrap samples from X
+  idx      <- sample(1:nrow(X), size = n, replace = T)
+  X.new    <- X[idx, ]
+  # generate treatment indicator
+  X.new[, which(colnames(X.new) == "treatment")] <- rbinom(n, 1, trt.prob)
+
+  n0       <- ceiling( n0events / (1 - prop.cens) )
+  # take bootstrap samples from X0
+  idx0     <- sample(1:nrow(X0), size = n0, replace = T)
+  X0.new   <- X0[idx0, ]
+  # generate treatment indicator
+  X0.new[, which(colnames(X0.new) == "treatment")] <- rbinom(n0, 1, trt.prob)
+
+  X.PS     <- rbind(X.new, X0.new)
+  study    <- rep(c(1, 0), times = c(n, n0))
+  df.PS    <- cbind(study = study, X.PS) %>%
     as.data.frame()
 
   # compute propensity scores (PS) via logistic regression and
@@ -396,25 +448,26 @@ sim.PSIPP <- function(
 
   # generate outcome within each stratum
   df.stratum.list <- lapply(1:nStrata, function(k){
-    mle.stratum     <- mle
-    mle.stratum[-1] <- mle.stratum[-1] + dev.mle.beta[k]
-    X.stratum       <- df.PS.strata %>%
+    theta.stratum     <- theta
+    theta.stratum[-1] <- theta.stratum[-1] + drift.beta[k]
+    X.stratum         <- df.PS.strata %>%
       filter(stratum == k)
-    studyID.stratum <- X.stratum$study
+    studyID.stratum   <- X.stratum$study
 
-    df.stratum      <- get.weibull.surv(
-      X = X.stratum[, colnames(X)],
-      mle = mle.stratum,
-      accrual.max = accrual.max,
-      min.follow.up = min.follow.up,
-      censor.rate = censor.rate
+    df.stratum        <- get.weibull.surv(
+      X         = X.stratum[, colnames(X)],
+      theta     = theta.stratum,
+      prop.cens = prop.cens,
+      nevents   = -1,
+      trt.prob  = 0.5,
+      bootstrap = FALSE
     )
     df.stratum$study <- studyID.stratum
     return(df.stratum)
   })
   df.stratum <- do.call(rbind, df.stratum.list)
 
-  data     <- df.stratum %>%
+  data       <- df.stratum %>%
     filter(study == 1) %>%
     dplyr::select(-study)
   histdata <- df.stratum %>%
