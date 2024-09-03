@@ -1,5 +1,5 @@
 library(hdbayes)
-source("~/Documents/UNC/Dissertation/super prior/Analysis/R/wrapper_glm/glm_loglik_mtx.R")
+source("Analysis/R/wrapper_glm/glm_loglik_mtx.R")
 
 #' Pointwise log-likelihood matrix of a GLM under stratified power prior (PP)
 #'

@@ -1,6 +1,6 @@
 library(hdbayes)
 library(cmdstanr)
-source("~/Documents/UNC/Dissertation/super prior/Analysis/R/wrapper_glm/get_stan_data.R")
+source("Analysis/R/wrapper_glm/get_stan_data.R")
 
 #' Sample from the posterior distribution of a GLM using the stratified power prior (PP).
 #'

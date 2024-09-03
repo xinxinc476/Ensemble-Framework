@@ -4,7 +4,7 @@
 library(survival)
 library(dplyr)
 
-source("~/Documents/UNC/Dissertation/super prior/Analysis/R/wrapper_glm/get_loglik.R")
+source("Analysis/R/wrapper_glm/get_loglik.R")
 
 #' transform survival time data to 'counting process' format
 #' @param data            a data.frame
