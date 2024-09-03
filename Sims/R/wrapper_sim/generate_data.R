@@ -462,7 +462,8 @@ sim.PSIPP <- function(
       trt.prob  = 0.5,
       bootstrap = FALSE
     )
-    df.stratum$study <- studyID.stratum
+    df.stratum$study   <- studyID.stratum
+    df.stratum$stratum <- k
     return(df.stratum)
   })
   df.stratum <- do.call(rbind, df.stratum.list)
