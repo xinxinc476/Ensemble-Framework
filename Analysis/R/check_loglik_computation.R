@@ -52,15 +52,8 @@ d <- glm.post(
 )
 
 post.samples <- rbind(colMeans(d), d)
-loglik <- get.loglik.glm(post.samples)
-loglik.draws      <- rowSums( loglik )
-loglik.postmean   <- loglik.draws[1]
-loglik.postmean # -905.196 (log-likelihood evaluated at posterior means of the parameters)
-
-beta.post.mean       <- colMeans(d)[covariate.name]
-log.hazard.post.mean <- colMeans(d)[2:6]
-
-parms.post.mean <- c(log.hazard.post.mean, beta.post.mean)
+loglik       <- get.loglik.glm(post.samples)
+loglik.draws <- rowSums( loglik ) # log-likelihood from poisson model
 
 # function to compute log-likelihood under the PWE model
 pwe.loglik <- function(beta, log_hazard) {
@@ -111,7 +104,7 @@ loglik.draws.pwe <- sapply(1:nrow(post.samples), function(i){
     pwe.loglik(beta = beta.i ,
                log_hazard = log_hazard.i)
   )
-})
+}) # log-likelihood from PWE model
 
 diff.loglik <- loglik.draws - loglik.draws.pwe
 table(diff.loglik) # differ by a constant
