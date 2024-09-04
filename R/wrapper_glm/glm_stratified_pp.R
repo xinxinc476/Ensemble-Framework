@@ -1,6 +1,6 @@
 library(hdbayes)
 library(cmdstanr)
-source("Analysis/R/wrapper_glm/get_stan_data.R")
+source("R/wrapper_glm/get_stan_data.R")
 
 #' Sample from the posterior distribution of a GLM using the stratified power prior (PP).
 #'
@@ -79,7 +79,7 @@ glm.stratified.pp = function(
     disp.sd        = disp.sd
   )
 
-  glm_stratified_pp = cmdstanr::cmdstan_model("Analysis/Stan/glm_stratified_pp.stan")
+  glm_stratified_pp = cmdstanr::cmdstan_model("Stan/glm_stratified_pp.stan")
   ## fit model in cmdstanr
   fit = glm_stratified_pp$sample(
     data = standat,

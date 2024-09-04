@@ -480,7 +480,7 @@ sim.PSIPP <- function(
 
 
 ## source wrappers
-wrapper.dir <- 'Analysis/R/wrapper_glm'
+wrapper.dir <- 'R/wrapper_glm'
 source(file.path(wrapper.dir, 'wrapper_surv.R'))
 source(file.path(wrapper.dir, 'get_strata_data.R'))
 

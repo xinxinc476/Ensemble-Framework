@@ -7,16 +7,18 @@ library(dplyr)
 save.dir <- 'Sims/R'
 
 ## Simulation scenario
-n    <- seq(150, 500, by = 50)
-#n0   <- 250
-case <- c("non-exchangeable", "PP", "BHM", "LEAP", "PSIPP")
-grid <- expand.grid(
-  n = n, case = case
+nevents    <- c(50, 150, 300)
+n0events   <- 150
+cens.prop  <- c(0.2, 0.4, 0.6) ## censoring proportion
+case       <- c("PP", "LEAP", "PSIPP", "BHM", "UNEXCH")
+grid       <- expand.grid(
+  nevents = nevents, n0events = n0events,
+  cens.prop = cens.prop, case = case
   , stringsAsFactors = FALSE
 )
 
-ndatasets <- 10000  ## total number of data sets
-each.cl   <- 400 ## how many data sets to run on a single node
+ndatasets <- 5000  ## total number of data sets
+each.cl   <- 100 ## how many data sets to run on a single node
 ncl       <- ceiling(ndatasets / each.cl) ## how many nodes per data set
 
 ## Repeat each row of the grid ncl times (want nrow(grid) <= 800 ideally)

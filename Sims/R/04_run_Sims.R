@@ -11,12 +11,11 @@ library(loo)
 library(scoringutils)
 
 ## source wrappers
-source("Sims/R/wrapper_sim.R")
+wrapper.dir <- 'Sims/R/wrapper_sim'
+source(file.path(wrapper.dir, "generate_data.R"))
+source(file.path(wrapper.dir, "get_trt_effect.R"))
 
 wrapper.dir <- 'Analysis/R/wrapper_glm'
-source(file.path(wrapper.dir, 'wrapper_surv.R'))
-source(file.path(wrapper.dir, 'get_loglik.R'))
-source(file.path(wrapper.dir, 'get_strata_data.R'))
 source(file.path(wrapper.dir, 'glm_stratified_pp.R'))
 source(file.path(wrapper.dir, 'glm_logml_stratified_pp.R'))
 
@@ -32,19 +31,22 @@ if ( is.na(id ) )
   id <- 1
 
 ## get this job's sim parameters
-grid.id   <- grid[id, ]
+grid.id      <- grid[id, ]
 rm(grid)
-seeds.id  <- seeds_list[grid.id$start:grid.id$end]
-n.id      <- as.integer(grid.id$n)
-n0.id     <- 250
-a0.id     <- 0.5
-case.id   <- as.character(grid.id$case)
-ndatasets <- grid.id$end - grid.id$start + 1
+seeds.id     <- seeds_list[grid.id$start:grid.id$end]
+nevents.id   <- as.integer(grid.id$nevents)
+n0events.id  <- as.integer(grid.id$n0events)
+cens.prop.id <- as.numeric(grid.id$cens.prop)
+a0.id        <- 0.5
+case.id      <- as.character(grid.id$case)
+ndatasets    <- grid.id$end - grid.id$start + 1
 
 
 ## obtain file name based on id
-filename  <- file.path(save.dir, paste0('id_', id, '_', 'n_', n.id, '_case_', case.id,
-                                        '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
+filename     <- file.path(save.dir, paste0('id_', id, '_', 'nevents_', nevents.id,
+                                           '_censorProp_', cens.prop.id,
+                                           '_case_', case.id,
+                                           '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
 
 ## setup simulation parameters
 nbreaks    <- 5
@@ -53,35 +55,75 @@ fmla       <- failcens ~ interval + treatment + sex + cage + node_bin
 fmla.psipp <- failcens ~ interval + treatment
 family     <- poisson("log")
 ps.formula <- ~ sex + cage + node_bin
-nStrata    <- 4 ## number of strata
+nStrata    <- 5 ## number of strata for analysis using PSIPP
 
-## specify true value of treatment effect (log hazard ratio at 2 years for treated v.s. untreated)
-param_true <- as.numeric( -mle.curr[3]/exp(mle.curr[1]) )
+## specify true value of treatment effect (difference in RFS probability at 2 years for treated v.s. untreated)
+#param_true <- as.numeric( -mle.curr[3]/exp(mle.curr[1]) )
 
 ## setup MCMC parameters
-nburnin  <- 2000
-nsamples <- 20000
+nburnin  <- 5000
+nsamples <- 25000
 nchains  <- 1
 
 
 for ( j in seq_len(ndatasets) ) {
   set.seed(seeds.id[j]) # set seed for generating current data
-  ## generate data set pair
-  if( case.id == "non-exchangeable" ){
+
+  ## generate current and historical time-to-event data sets
+  if( case.id == "UNEXCH " ){
     data.list <- sim.UNEXCH(
-      n = n.id, n0 = n0.id
+      prop.cens     = cens.prop.id,
+      nevents       = nevents.id,
+      n0events      = n0events.id,
+      X             = design.mtx.curr,
+      X0            = design.mtx.hist,
+      theta         = mle.curr,
+      theta0        = mle.hist,
+      trt.prob      = 0.5
     )
   }else if( case.id == "PP" ){
     data.list <- sim.PP(
-      n = n.id, n0 = n0.id
+      prop.cens     = cens.prop.id,
+      nevents       = nevents.id,
+      n0events      = n0events.id,
+      X             = design.mtx.curr,
+      theta         = mle.curr,
+      trt.prob      = 0.5
     )
   }else if( case.id == "BHM" ){
     data.list <- sim.BHM(
-      n = n.id, n0 = n0.id
+      prop.cens     = cens.prop.id,
+      nevents       = nevents.id,
+      n0events      = n0events.id,
+      X             = design.mtx.curr,
+      theta         = mle.curr,
+      theta.sd      = 0.2,
+      trt.prob      = 0.5
     )
   }else if( case.id == "LEAP" ){
     data.list <- sim.LEAP(
-      n = n.id, n0 = n0.id
+      prop.cens     = cens.prop.id,
+      nevents       = nevents.id,
+      n0events      = n0events.id,
+      X             = design.mtx.curr,
+      X0            = design.mtx.hist,
+      theta         = mle.curr,
+      theta0        = mle.hist,
+      exch          = 0.5,
+      trt.prob      = 0.5
+    )
+  }else if( case.id == "PSIPP" ){
+    data.list <- sim.PSIPP(
+      prop.cens     = cens.prop.id,
+      nevents       = nevents.id,
+      n0events      = n0events.id,
+      X             = design.mtx.curr,
+      X0            = design.mtx.hist,
+      ps.formula    = ~ sex + cage + node_bin,
+      nStrata       = 3,
+      theta         = mle.curr,
+      drift.beta    = c(-0.1, 0, 0.1),
+      trt.prob      = 0.5
     )
   }else{
     stop("not available")
@@ -104,10 +146,10 @@ for ( j in seq_len(ndatasets) ) {
     nStrata = nStrata
   )
 
-  ## analysis using the reference prior, PP w/ a0 = 0.5, BHM, LEAP, and PSIPP
+  ## analysis using a non-informative reference prior, PP w/ a0 = 0.5, BHM, LEAP, and PSIPP
 
   ## reference prior:
-  d.ref <- glm.post(
+  d.ref         <- glm.post(
     formula = fmla, family = family, data.list = input.list.nonpsipp$data.list,
     offset.list = input.list.nonpsipp$offset.list,
     iter_warmup = nburnin,
@@ -116,10 +158,10 @@ for ( j in seq_len(ndatasets) ) {
   )
   res.logml.ref <- glm.logml.post(
     post.samples = d.ref
-  )
+  )$logml
 
   ## PP w/ a0 = 0.5:
-  d.pp <- glm.pp(
+  d.pp        <- glm.pp(
     formula = fmla, family = family, data.list = input.list.nonpsipp$data.list,
     a0.vals = a0.id, offset.list = input.list.nonpsipp$offset.list,
     iter_warmup = nburnin,
@@ -131,10 +173,10 @@ for ( j in seq_len(ndatasets) ) {
     iter_warmup = nburnin,
     iter_sampling = nsamples,
     chains = nchains
-  )
+  )$logml
 
   ## BHM:
-  d.bhm <- glm.bhm(
+  d.bhm        <- glm.bhm(
     formula = fmla, family = family, data.list = input.list.nonpsipp$data.list,
     offset.list = input.list.nonpsipp$offset.list,
     meta.sd.sd = 0.5,
@@ -144,10 +186,10 @@ for ( j in seq_len(ndatasets) ) {
   )
   res.logml.bhm <- glm.logml.map(
     post.samples = d.bhm,
-    iter_warmup = nburnin + 3000,
-    iter_sampling = nsamples + 3000,
+    iter_warmup = nburnin,
+    iter_sampling = nsamples,
     chains = nchains
-  )
+  )$logml
 
   ## LEAP:
   K                <- 2
@@ -167,10 +209,10 @@ for ( j in seq_len(ndatasets) ) {
     iter_warmup = nburnin,
     iter_sampling = nsamples,
     chains = nchains
-  )
+  )$logml
 
   ## PSIPP:
-  d.psipp <- glm.stratified.pp(
+  d.psipp        <- glm.stratified.pp(
     formula = fmla.psipp, family = family, data.list = input.list.psipp$data.list,
     strata.list = input.list.psipp$strata.list,
     a0.strata = input.list.psipp$a0.strata,
@@ -185,36 +227,24 @@ for ( j in seq_len(ndatasets) ) {
     iter_warmup = nburnin,
     iter_sampling = nsamples,
     chains = nchains
-  )
+  )$logml
 
-  ## estimated treatment effect from each individual prior
   d.list <- list(
     "ref" = d.ref, "pp" = d.pp, "bhm" = d.bhm,
     "leap" = d.leap, "psipp" = d.psipp
   )
-  trt.effect.list <- lapply(1:length(d.list), function(i){
-    d     <- d.list[[i]]
-    prior <- names(d.list)[i]
-    if( prior == "psipp" ){
-      return(
-        get.log.hazard.ratio.2yr.psipp(
-          post.samples = d,
-          res.strata = input.list.psipp$res.strata,
-          breaks = input.list.psipp$breaks
-        )
-      )
-    }else{
-      return(
-        get.log.hazard.ratio.2yr.glm(
-          post.samples = d,
-          data = data.list$curr,
-          breaks = input.list.nonpsipp$breaks
-        )
-      )
-    }
-  })
 
-  loo.list       <- lapply(1:length(d.list), function(i){
+  ## estimated weights from each model-averaging method
+  wts.estim.j <- data.frame(
+    method  = c("ref", "pp", "bhm", "leap", "psipp")
+  )
+  wts.estim.j$logml     <- c(
+    res.logml.ref, res.logml.pp, res.logml.bhm,
+    res.logml.leap, res.logml.psipp
+  )
+  wts.estim.j$post.prob <- bridgesampling::post_prob(wts.estim.j$logml)
+
+  loo.list  <- lapply(1:length(d.list), function(i){
     d     <- d.list[[i]]
     prior <- names(d.list)[i]
     if( prior == "psipp" ){
@@ -226,71 +256,62 @@ for ( j in seq_len(ndatasets) ) {
       loo::loo(loglik)
     )
   })
-  logml.list     <- list(length = length(file.list))
-
-  trt.estim <- rbind(
-    d.ref %>%
-      summarize_draws(mean, sd, ~quantile2(.x, probs = c(0.025, 0.975))) %>%
-      filter(variable == "trt"),
-    d.pp %>%
-      summarize_draws(mean, sd, ~quantile2(.x, probs = c(0.025, 0.975))) %>%
-      filter(variable == "trt"),
-    res$fit$summary("trteff", mean, sd, ~quantile2(.x, probs = c(0.025, 0.975)))
-
-  )
-  trt.estim$variable     <- c("Ref", "PP", "PSIPP")
-  colnames(trt.estim)[1] <- "method"
-
-  ## estimated weights from each method
-  wts.estim <- data.frame(
-    method  = c("Ref", "PP", "PSIPP")
-  )
-  wts.estim$logml        <- c(res.logml.ref$logml, res.logml.pp$logml, res.logml.psipp$logml)
-  wts.estim$post.prob    <- bridgesampling::post_prob(res.logml.ref$logml, res.logml.pp$logml, res.logml.psipp$logml)
-
-  loo_psipp  <- (res$fit)$loo(k_threshold=0.7)
-  ## compute pointwise log-likelihood matrices for PP and Ref
-  loo_pp     <- get.Loglik.ref(d.pp, formula, family, data.list)
-  loo_ref    <- get.Loglik.ref(d.ref, formula, family, data.list)
-  loo_list   <- list(loo_ref, loo_pp, loo_psipp)
-  lpd_point  <- sapply(loo_list, function(l){
+  lpd_point <- sapply(loo.list, function(l){
     l$pointwise[,"elpd_loo"]
   })
+  wts.estim.j$pbma_wts     <- pseudobma_weights(lpd_point, BB = FALSE)
+  wts.estim.j$pbma_BB_wts  <- pseudobma_weights(lpd_point, BB = TRUE) # default is BB=TRUE
+  wts.estim.j$stacking_wts <- stacking_weights(lpd_point)
+  rm(loo.list, lpd_point)
 
-  wts.estim$pbma_wts     <- pseudobma_weights(lpd_point, BB=FALSE)
-  wts.estim$pbma_BB_wts  <- pseudobma_weights(lpd_point) # default is BB=TRUE
-  wts.estim$stacking_wts <- stacking_weights(lpd_point)
 
-  ## obtain posterior samples of treatment effect from each method
-  trt.samples.ref = suppressWarnings(
-    as.numeric(unlist(d.ref[, "trt"]))
-  )
-  trt.samples.pp = suppressWarnings(
-    as.numeric(unlist(d.pp[, "trt"]))
-  )
-  trt.samples.psipp <- as.numeric(res$fit$draws(variables = "trteff"))
-  trt.samples.mtx   <- cbind(trt.samples.ref, trt.samples.pp, trt.samples.psipp)
-
-  ## draw i.i.d. samples (c0) from categorical distribution with probability being posterior model probabilities
-  trt.samples.mtx2 <- sapply(c("post.prob", "pbma_wts", "pbma_BB_wts", "stacking_wts"), function(wts_name){
-    wts = as.numeric( wts.estim[, wts_name] )
-    samples = replicate(
-      iter_sampling,
-      sample.BMA(samples.mtx = trt.samples.mtx, post.model.probs = wts)
-    )
-    return(samples)
+  ## obtain posterior samples of treatment effects from each individual prior
+  trt.effect.list <- lapply(1:length(d.list), function(i){
+    d     <- d.list[[i]]
+    prior <- names(d.list)[i]
+    if( prior == "psipp" ){
+      return(
+        get.surv.diff.2yr.psipp(
+          post.samples = d,
+          res.strata = input.list.psipp$res.strata,
+          breaks = input.list.psipp$breaks
+        )
+      )
+    }else{
+      return(
+        get.surv.diff.2yr.glm(
+          post.samples = d,
+          data = data.list$curr,
+          breaks = input.list.nonpsipp$breaks
+        )
+      )
+    }
   })
-  colnames(trt.samples.mtx2)[1] <- "bma"
-  trt.estim2 <- apply(trt.samples.mtx2, 2, function(s){
+  trt.estim.j <- sapply(1:length(trt.effect.list), function(i){
+    s <- trt.effect.list[[i]]
     c(mean = mean(s), sd = sd(s), quantile2(s, probs = c(0.025, 0.975)))
   })
-  trt.estim2 <- data.frame(
-    method = colnames(trt.samples.mtx2),
-    t(trt.estim2),
-    row.names = NULL
-  )
-  rm(trt.samples.mtx, trt.samples.mtx2)
-  trt.estim  <- rbind(trt.estim, trt.estim2)
+  trt.estim.j        <- t(trt.estim.j) %>%
+    as.data.frame()
+  trt.estim.j$method <- c("ref", "pp", "bhm", "leap", "psipp")
+  trt.estim.j        <- trt.estim.j[, c("method", colnames(trt.estim.j)[which(colnames(trt.estim.j) != "method")])]
+
+  ## obtain posterior samples of treatment effects from each model-averaged prior
+  trt.effect.mtx     <- do.call(cbind, trt.effect.list)
+  trt.effect.list    <- lapply(c("post.prob", "pbma_wts", "pbma_BB_wts", "stacking_wts"), function(wts_name){
+    wts     <- as.numeric( wts.estim.j[, wts_name] )
+    samples <- sample.model.avg.prior(wts = wts, samples.mtx = trt.effect.mtx)
+    return(samples)
+  })
+  trt.estim.j2 <- sapply(1:length(trt.effect.list), function(i){
+    s <- trt.effect.list[[i]]
+    c(mean = mean(s), sd = sd(s), quantile2(s, probs = c(0.025, 0.975)))
+  })
+  trt.estim.j2 <- t(trt.estim.j2) %>%
+    as.data.frame()
+  trt.estim.j2$method <- c("bma", "pbma", "pbma_BB", "stacking")
+  trt.estim.j2        <- trt.estim.j2[, c("method", colnames(trt.estim.j2)[which(colnames(trt.estim.j2) != "method")])]
+  rm(trt.estim.j2, trt.effect.list, trt.effect.mtx)
 
   trt.estim$param_true <- param_true
   ## compute interval score
@@ -317,14 +338,14 @@ for ( j in seq_len(ndatasets) ) {
 
   ## store results
   if(j == 1) {
-    simres.trt <- trt.estim
-    simres.wts <- wts.estim
+    simres.trt <- trt.estim.j
+    simres.wts <- wts.estim.j
   } else{
-    simres.trt <- rbind(simres.trt, trt.estim)
-    simres.wts <- rbind(simres.wts, wts.estim)
+    simres.trt <- rbind(simres.trt, trt.estim.j)
+    simres.wts <- rbind(simres.wts, wts.estim.j)
   }
 
-  if(j %% 10 == 0){
+  if(j %% 5 == 0){
     lst <- list(
       'id'      = id
       , 'scen'  = grid.id[1:3]

@@ -74,7 +74,7 @@ glm.logml.stratified.pp = function(
       'offs'            = offs0.stratum
     )
     ## fit PP using historical data sets
-    glm_pp = cmdstanr::cmdstan_model("Analysis/Stan/glm_pp.stan")
+    glm_pp = cmdstanr::cmdstan_model("Stan/glm_pp.stan")
     fit    = glm_pp$sample(data = hist.stan.data,
                         iter_warmup = iter_warmup, iter_sampling = iter_sampling, chains = chains,
                         ...)
