@@ -20,7 +20,7 @@ library(latex2exp)
 library(collapse)
 library(loo)
 
-wrapper.dir = "~/Documents/UNC/Dissertation/super prior/Analysis/R/wrapper_glm"
+wrapper.dir = "~/Documents/UNC/Dissertation/super prior/Code/Analysis/R/wrapper_glm"
 source(file.path(wrapper.dir, "glm_logml_stratified_pp.R"))
 #source(file.path(wrapper.dir, "wrapper_surv.R"))
 #source(file.path(wrapper.dir, "glm_stratified_pp.R"))
