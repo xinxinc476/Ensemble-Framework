@@ -1,15 +1,25 @@
 library(tidyverse)
+library(collapse)
 library(MCMCpack)
 
-## treatment effect defined as log hazard ratio at 2 years for treated v.s. untreated
+## treatment effect (estimand): difference in survival (or relapse-free survival) probability at 2 years for treated
+## v.s. untreated, i.e., P(T > 2 | A = 1) - P(T > 2 | A = 0)
 
-#' function to compute treatment effect for priors other than PSIPP
-#' @param data  generated current data set (time-to-event data, not in counting process format)
-get.log.hazard.ratio.2yr.glm <- function(
+#' function to predict survival probability at t years for treated and untreated groups for priors other than PSIPP
+#'
+#' @param t                 time
+#' @param post.samples      posterior samples of a GLM under various priors (other than PSIPP), with an attribute
+#'                          called 'data' which includes the list of variables specified in the data block of the
+#'                          Stan program.
+#' @param data              time-to-event data (not in counting process format)
+#' @param breaks            cut points for time intervals
+#'
+get.surv.prob.glm <- function(
+    t,
     post.samples,
     data,
     breaks
-) {
+){
   J         = length(breaks) + 1
   stan.data = attr(post.samples, 'data')
   X         = stan.data$X
@@ -18,37 +28,81 @@ get.log.hazard.ratio.2yr.glm <- function(
   )
   log_hazard = beta[, 1:J]
   log_hazard = log_hazard[, 1] + cbind(0, log_hazard[, 2:J])
+  hazard     = exp(log_hazard) ## baseline hazards
 
-  ## interval index for which the value 2 belongs to
-  interval.id = findInterval(2, c(0, breaks, Inf), left.open = TRUE)
-  log_hazard  = log_hazard[, interval.id] ## log baseline hazard at 2 years
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
 
-  beta        = beta[, -(1:J)]
-  X.data      = as.matrix( data[, colnames(beta)] )
-  eta.mtx     = tcrossprod(beta, X.data)
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
 
-  ## predicted 2-year log hazard for each subject in data
-  log_hazard_2yr = log_hazard + eta.mtx
+  H          = hazard[, 1:interval.id, drop = F] %r*% interval.length
+  if( interval.id != 1 ){
+    H        = t( apply(H, 1, cumsum) ) ## cumulative baseline hazard
+  }
+  H          = H[, interval.id] ## cumulative baseline hazard at t years
+  beta       = beta[, -(1:J)]
+
+  X.data     = as.matrix( data[, colnames(beta)] )
+  eta.mtx    = tcrossprod(beta, X.data)
+  ## predicted t-year survival probability for each subject in data
+  S          = exp( -H * exp(eta.mtx) )
 
   id.trt     = which( data$treatment == 1 )
   id.ctl     = which( data$treatment == 0 )
 
-  ## use Bayesian bootstrap to compute predicted 2-year log hazard for subjects in the treatment and control arms
+  ## use Bayesian bootstrap to compute predicted t-year survival probability for subjects in the treatment and control arms
   ## sample from dirichlet(1, 1, .., 1) distribution
-  omega.trt      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
-  omega.ctl      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
-  log.hazard.trt = rowSums( omega.trt * log_hazard_2yr[, id.trt])
-  log.hazard.ctl = rowSums( omega.ctl * log_hazard_2yr[, id.ctl])
-  log.hazard.ratio = log.hazard.trt - log.hazard.ctl
-  return(log.hazard.ratio)
+  omega.trt  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
+  omega.ctl  = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
+  surv.trt   = rowSums( omega.trt * S[, id.trt])
+  surv.ctl   = rowSums( omega.ctl * S[, id.ctl])
+  return(
+    list(
+      surv.trt = surv.trt,
+      surv.ctl = surv.ctl
+    )
+  )
 }
 
-## for PSIPP
-get.log.hazard.ratio.2yr.psipp <- function(
+
+#' function to estimate the treatment effect (difference in 2-year survival probability between treated and untreated),
+#' i.e., P(T > 2 | A = 1) - P(T > 2 | A = 0), for priors other than PSIPP
+get.surv.diff.2yr.glm <- function(
+    post.samples,
+    data,
+    breaks
+) {
+  surv.list = get.surv.prob.glm(
+    t = 2,
+    post.samples = post.samples,
+    data = data,
+    breaks = breaks
+  )
+  surv.diff  = surv.list$surv.trt - surv.list$surv.ctl
+  return(surv.diff)
+}
+
+
+#' function to predict survival probability at t years for treated and untreated groups for PSIPP
+#'
+#' @param t                 time
+#' @param post.samples      output from [glm.stratified.pp()] giving posterior samples of a GLM under the stratified power
+#'                          prior (PP), with an attribute called 'data' which includes the list of variables specified in
+#'                          the data block of the Stan program.
+#' @param data              time-to-event data (not in counting process format)
+#' @param breaks            cut points for time intervals
+#'
+get.surv.prob.psipp <- function(
+    t,
     post.samples,
     res.strata,
     breaks
-) {
+){
   J          = length(breaks) + 1
   stan.data  = attr(post.samples, 'data')
   p          = stan.data$p
@@ -57,17 +111,34 @@ get.log.hazard.ratio.2yr.psipp <- function(
   beta       = suppressWarnings(
     as.matrix( post.samples[, paste0( "treatment", '_stratum_', 1:K ), drop=F] )
   )
-  log_hazard = suppressWarnings(
-    as.matrix( post.samples[, paste0( colnames(X)[-ncol(X)], '_stratum_', rep(1:K, each = p-1) ), drop=F] )
-  )
-  interval_names = colnames(X)[-ncol(X)]
 
-  ## interval index for which the value 2 belongs to
-  interval.id        = findInterval(2, c(0, breaks, Inf), left.open = TRUE)
-  log_hazard_stratum = sapply(1:K, function(k){
+  log_hazard = suppressWarnings(
+    as.matrix( post.samples[, paste0( colnames(X)[-which(colnames(X) == "treatment")], '_stratum_', rep(1:K, each = p-1) ), drop=F] )
+  )
+  interval_names = colnames(X)[-which(colnames(X) == "treatment")]
+
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
+
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
+
+  ## compute cumulative baseline hazard at t years for each stratum
+  H = sapply(1:K, function(k){
     log_hazard_stratum = log_hazard[, paste0(interval_names, '_stratum_', k)]
     log_hazard_stratum = log_hazard_stratum[, 1] + cbind(0, log_hazard_stratum[, 2:J])
-    return( log_hazard_stratum[, interval.id]) ## log baseline hazard at 2 years
+    hazard_stratum     = exp(log_hazard_stratum) ## baseline hazards
+
+    H_stratum          = hazard_stratum[, 1:interval.id, drop = F] %r*% interval.length
+    if( interval.id != 1 ){
+      H_stratum        = t( apply(H_stratum, 1, cumsum) ) ## cumulative baseline hazard
+    }
+    H_stratum        = H_stratum[, interval.id]
+    return( H_stratum) ## cumulative baseline hazard at 2 years
   })
 
   curr.psipp         = res.strata$data.list$curr
@@ -78,27 +149,51 @@ get.log.hazard.ratio.2yr.psipp <- function(
   num.obs            = as.numeric( table(curr.psipp$stratum) )
   end.idx            = cumsum(num.obs)
   start.idx          = c(1, end.idx[-K] + 1)
-  trt.psipp          = curr.psipp[, "treatment", drop = F]
 
-  ## predicted 2-year log hazard for each subject in data
-  log_hazard_2yr = lapply(1:K, function(k){
-    beta_stratum = beta[, paste0( 'treatment_stratum_', k), drop = F]
-    eta_stratum  = tcrossprod(beta_stratum, trt.psipp[ start.idx[k]:end.idx[k], ])
-    return(
-      eta_stratum + log_hazard_stratum[, k]
+  ## predicted t-year survival probability for untreated for each stratum
+  S.ctl = lapply(1:K, function(k){
+    H_stratum     = H[, k]
+    S_ctl_stratum = exp( -H_stratum )
+    return(S_ctl_stratum)
+  }
+  )
+  S.ctl = do.call(cbind, S.ctl)
+
+  ## predicted t-year survival probability for untreated for each stratum
+  S.trt = lapply(1:K, function(k){
+    H_stratum     = H[, k]
+    beta_stratum  = beta[, paste0( 'treatment_stratum_', k)]
+    S_trt_stratum = exp( -H_stratum * exp(beta_stratum) )
+    return(S_trt_stratum)
+  }
+  )
+  S.trt = do.call(cbind, S.trt)
+
+  ## take sample mean across strata
+  surv.trt   = rowMeans(S.trt)
+  surv.ctl   = rowMeans(S.ctl)
+  return(
+    list(
+      surv.trt = surv.trt,
+      surv.ctl = surv.ctl
     )
-  })
-  log_hazard_2yr = do.call(cbind, log_hazard_2yr)
+  )
+}
 
-  id.trt     = which( curr.psipp$treatment == 1 )
-  id.ctl     = which( curr.psipp$treatment == 0 )
 
-  ## use Bayesian bootstrap to compute predicted 2-year survival probability for subjects in the treatment and control arms
-  ## sample from dirichlet(1, 1, .., 1) distribution
-  omega.trt      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
-  omega.ctl      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
-  log.hazard.trt = rowSums( omega.trt * log_hazard_2yr[, id.trt])
-  log.hazard.ctl = rowSums( omega.ctl * log_hazard_2yr[, id.ctl])
-  log.hazard.ratio = log.hazard.trt - log.hazard.ctl
-  return(log.hazard.ratio)
+#' function to estimate the treatment effect (difference in 2-year survival probability between treated and untreated),
+#' i.e., P(T > 2 | A = 1) - P(T > 2 | A = 0), for PSIPP
+get.surv.diff.2yr.psipp <- function(
+    post.samples,
+    res.strata,
+    breaks
+) {
+  surv.list = get.surv.prob.psipp(
+    t = 2,
+    post.samples = post.samples,
+    res.strata = res.strata,
+    breaks = breaks
+  )
+  surv.diff  = surv.list$surv.trt - surv.list$surv.ctl
+  return(surv.diff)
 }
