@@ -79,7 +79,7 @@ glm.stratified.pp = function(
     disp.sd        = disp.sd
   )
 
-  glm_stratified_pp = cmdstanr::cmdstan_model("~/Documents/UNC/Dissertation/super prior/Analysis/Stan/glm_stratified_pp.stan")
+  glm_stratified_pp = cmdstanr::cmdstan_model("Analysis/Stan/glm_stratified_pp.stan")
   ## fit model in cmdstanr
   fit = glm_stratified_pp$sample(
     data = standat,
