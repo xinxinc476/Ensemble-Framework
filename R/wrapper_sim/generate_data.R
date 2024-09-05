@@ -60,7 +60,7 @@ get.cens.rate <- function(
     cenprop <- integrate(f, 0, Inf)$value
     abs(cenprop - prop.cens)
   }
-  optimize(optfun, interval = c(0.01, 1000))$minimum
+  optimize(optfun, interval = c(0.001, 1000))$minimum
 }
 
 
@@ -130,18 +130,24 @@ get.weibull.surv <- function(
   # shape = alpha = 1/sigma, scale = exp(-lambda / alpha), where lambda = -x'beta/sigma
   t        <- rweibull(n, shape = 1/sigma, scale = exp(eta))
 
-  # compute the appropriate censoring rate to achieve the desired censoring proportion
-  alpha       <- 1/sigma
-  lambda      <- -eta/sigma
-  censor.rate <- sapply(lambda, function(z){
-    get.cens.rate(alpha = alpha, lambda = z, prop.cens = prop.cens)
-  })
-  # generate censoring time using exponential distribution with rate = censor.rate
-  censor.time <- rexp(n = n, rate = censor.rate)
+  if ( prop.cens > 0 ){
+    # compute the appropriate censoring rate to achieve the desired censoring proportion
+    alpha       <- 1/sigma
+    lambda      <- -eta/sigma
+    censor.rate <- sapply(lambda, function(z){
+      get.cens.rate(alpha = alpha, lambda = z, prop.cens = prop.cens)
+    })
+    # generate censoring time using exponential distribution with rate = censor.rate
+    censor.time <- rexp(n = n, rate = censor.rate)
 
-  # compute observation time and event indicator
-  observed.time <- pmin(t, censor.time)
-  eventind      <- as.numeric(t <= censor.time)
+    # compute observation time and event indicator
+    observed.time <- pmin(t, censor.time)
+    eventind      <- as.numeric(t <= censor.time)
+  }else{
+    observed.time <- t
+    eventind      <- rep(1, n)
+  }
+
 
   if( "(Intercept)" %in% colnames(X.new) ) {
     X.new <- X.new[, !colnames(X.new) %in% "(Intercept)", drop = F]
@@ -380,6 +386,7 @@ sim.UNEXCH <- function(
 #' estimate the propensity scores (PS) via a logistic regression and assign subjects into different strata
 #' based on PS
 #' for each stratum, generate survival outcomes using `theta` with some drift in the regression coefficients
+#' for intercept and treatment
 #'
 #' @param prop.cens     desired censoring proportion
 #' @param nevents       desired number of events in simulated current data
@@ -455,13 +462,16 @@ sim.PSIPP <- function(
     studyID.stratum   <- X.stratum$study
 
     df.stratum        <- get.weibull.surv(
-      X         = X.stratum[, colnames(X)],
-      theta     = theta.stratum,
+      X         = X.stratum[, c("(Intercept)", "treatment" )],
+      theta     = theta.stratum[c("logscale", "(Intercept)", "treatment" )],
       prop.cens = prop.cens,
       nevents   = -1,
       trt.prob  = 0.5,
       bootstrap = FALSE
     )
+    df.stratum <- cbind(df.stratum,
+                        X.stratum[, colnames(X)[! colnames(X) %in% c("(Intercept)", "treatment" )]]) %>%
+      as.data.frame()
     df.stratum$study   <- studyID.stratum
     df.stratum$stratum <- k
     return(df.stratum)
