@@ -1,0 +1,154 @@
+---
+title: "Simulated Data Example"
+output: html_notebook
+---
+
+```{r, include=FALSE}
+library(survival)
+library(tidyverse)
+library(psrwe)
+library(dplyr)
+library(survminer)
+library(gridExtra)
+
+source("R/wrapper_sim/generate_data.R")
+```
+
+```{r}
+prop.cens <- 0.2
+nevents   <- 150
+n0events  <- 150
+```
+
+
+# Exchangeable (under PP assumption)
+
+```{r, fig.width=8, fig.height=4}
+data.list1 <- sim.PP(
+  prop.cens = prop.cens,
+  nevents = nevents,
+  n0events = n0events
+)
+
+curr <- data.list1$curr
+hist <- data.list1$hist
+p1   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = curr), 
+                      data = curr) + 
+  labs(subtitle = "current data")
+p2   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = hist), 
+                      data = hist) + 
+  labs(subtitle = "historical data")
+
+grid.arrange(grobs = list(p1$plot, p2$plot),
+             nrow = 1, ncol = 2)
+```
+
+
+# Half-Exchangeable (under LEAP assumption)
+
+```{r, fig.width=8, fig.height=4}
+data.list2 <- sim.LEAP(
+  prop.cens = prop.cens,
+  nevents = nevents,
+  n0events = n0events
+)
+
+curr <- data.list2$curr
+hist <- data.list2$hist
+p1   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = curr), 
+                      data = curr) + 
+  labs(subtitle = "current data")
+p2   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = hist), 
+                      data = hist) + 
+  labs(subtitle = "historical data")
+
+grid.arrange(grobs = list(p1$plot, p2$plot),
+             nrow = 1, ncol = 2)
+```
+
+
+# Stratum-Specific Exchangeable (under PSIPP assumption)
+
+```{r, fig.width=8, fig.height=10}
+data.list3 <- sim.PSIPP(
+  prop.cens = prop.cens,
+  nevents = nevents,
+  n0events = n0events
+)
+
+curr <- data.list3$curr
+hist <- data.list3$hist
+
+plt.list <- lapply(1:3, function(k){
+  list(
+    currplt = survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = curr), 
+                      data = curr %>% filter(stratum == k)) + 
+      labs(subtitle = "current data"),
+    histplt = survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = hist), 
+                      data = hist %>% filter(stratum == k)) + 
+      labs(subtitle = "historical data")
+  )
+})
+plt.list <- list(
+  plt.list[[1]]$currplt,
+  plt.list[[1]]$histplt,
+  plt.list[[2]]$currplt,
+  plt.list[[2]]$histplt,
+  plt.list[[3]]$currplt, 
+  plt.list[[3]]$histplt
+)
+plt.list <- lapply(plt.list, function(x){
+  x$plot
+})
+
+grid.arrange(grobs = plt.list,
+             nrow = 3, ncol = 2,
+             top)
+```
+
+
+# Unexchangeable Type I (under BHM assumption)
+
+```{r, fig.width=8, fig.height=4}
+data.list4 <- sim.BHM(
+  prop.cens = prop.cens,
+  nevents = nevents,
+  n0events = n0events
+)
+
+curr <- data.list4$curr
+hist <- data.list4$hist
+p1   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = curr), 
+                      data = curr) + 
+  labs(subtitle = "current data")
+p2   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = hist), 
+                      data = hist) + 
+  labs(subtitle = "historical data")
+
+grid.arrange(grobs = list(p1$plot, p2$plot),
+             nrow = 1, ncol = 2)
+```
+
+
+# Unexchangeable Type II
+
+```{r, fig.width=8, fig.height=4}
+data.list5 <- sim.UNEXCH(
+  prop.cens = prop.cens,
+  nevents = nevents,
+  n0events = n0events
+)
+
+curr <- data.list5$curr
+hist <- data.list5$hist
+p1   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = curr), 
+                      data = curr) + 
+  labs(subtitle = "current data")
+p2   <- survminer::ggsurvplot(survfit(Surv(failtime, failcens) ~ treatment, data = hist), 
+                      data = hist) + 
+  labs(subtitle = "historical data")
+
+grid.arrange(grobs = list(p1$plot, p2$plot),
+             nrow = 1, ncol = 2)
+```
+
