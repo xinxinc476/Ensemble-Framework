@@ -94,13 +94,11 @@ get.surv.diff.2yr.glm <- function(
 #' @param post.samples      output from [glm.stratified.pp()] giving posterior samples of a GLM under the stratified power
 #'                          prior (PP), with an attribute called 'data' which includes the list of variables specified in
 #'                          the data block of the Stan program.
-#' @param data              time-to-event data (not in counting process format)
 #' @param breaks            cut points for time intervals
 #'
 get.surv.prob.psipp <- function(
     t,
     post.samples,
-    res.strata,
     breaks
 ){
   J          = length(breaks) + 1
@@ -141,15 +139,6 @@ get.surv.prob.psipp <- function(
     return( H_stratum) ## cumulative baseline hazard at 2 years
   })
 
-  curr.psipp         = res.strata$data.list$curr
-  curr.psipp$stratum = as.integer( res.strata$strata.list[[1]] )
-  ## re-order curr.psipp by stratum
-  curr.psipp         = curr.psipp[order(curr.psipp$stratum), ]
-  ## get starting and ending indices for each strata
-  num.obs            = as.numeric( table(curr.psipp$stratum) )
-  end.idx            = cumsum(num.obs)
-  start.idx          = c(1, end.idx[-K] + 1)
-
   ## predicted t-year survival probability for untreated for each stratum
   S.ctl = lapply(1:K, function(k){
     H_stratum     = H[, k]
@@ -185,13 +174,11 @@ get.surv.prob.psipp <- function(
 #' i.e., P(T > 2 | A = 1) - P(T > 2 | A = 0), for PSIPP
 get.surv.diff.2yr.psipp <- function(
     post.samples,
-    res.strata,
     breaks
 ) {
   surv.list = get.surv.prob.psipp(
     t = 2,
     post.samples = post.samples,
-    res.strata = res.strata,
     breaks = breaks
   )
   surv.diff  = surv.list$surv.trt - surv.list$surv.ctl
@@ -215,4 +202,61 @@ sample.model.avg.prior = function(wts, samples.mtx){
   })
   res.samples <- unlist(res.samples)
   return(res.samples)
+}
+
+
+#' function to compute log hazard ratio at 2 years for treated v.s. untreated for priors other than PSIPP
+#' @param data  generated current data set (time-to-event data, not in counting process format)
+get.log.hazard.ratio.2yr.glm <- function(
+    post.samples,
+    data,
+    breaks
+) {
+  J         = length(breaks) + 1
+  stan.data = attr(post.samples, 'data')
+  X         = stan.data$X
+  beta      = suppressWarnings(
+    as.matrix( post.samples[, colnames(X), drop=F] )
+  )
+  beta        = beta[, -(1:J)]
+  X.data      = as.matrix( data[, colnames(beta)] )
+  eta.mtx     = tcrossprod(beta, X.data)
+
+  ## predicted 2-year log hazard for each subject in data - log baseline hazard at 2 years
+  ## as both treated and untreated have the same value of log baseline hazard at 2 years
+  log_hazard_2yr = eta.mtx
+
+  id.trt     = which( data$treatment == 1 )
+  id.ctl     = which( data$treatment == 0 )
+
+  ## use Bayesian bootstrap to compute predicted 2-year log hazard for subjects in the treatment and control arms
+  ## sample from dirichlet(1, 1, .., 1) distribution
+  omega.trt      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.trt)))
+  omega.ctl      = MCMCpack::rdirichlet(n = nrow(beta), alpha = rep(1, length(id.ctl)))
+  log.hazard.trt = rowSums( omega.trt * log_hazard_2yr[, id.trt])
+  log.hazard.ctl = rowSums( omega.ctl * log_hazard_2yr[, id.ctl])
+  log.hazard.ratio = log.hazard.trt - log.hazard.ctl
+  return(log.hazard.ratio)
+}
+
+
+#' function to compute log hazard ratio at 2 years for treated v.s. untreated for PSIPP
+get.log.hazard.ratio.2yr.psipp <- function(
+    post.samples,
+    breaks
+) {
+  J          = length(breaks) + 1
+  stan.data  = attr(post.samples, 'data')
+  p          = stan.data$p
+  K          = stan.data$K
+  X          = stan.data$X
+
+  ## estimated log hazard ratio for treated v.s. untreated within each stratum for each time interval
+  beta       = suppressWarnings(
+    as.matrix( post.samples[, paste0( "treatment", '_stratum_', 1:K ), drop=F] )
+  )
+
+  ## take sample mean across strata
+  log.hazard.ratio = rowMeans(beta)
+  return(log.hazard.ratio)
 }
