@@ -450,15 +450,15 @@ sim.PSIPP <- function(
     nstrata = nStrata,
     trim_ab = "none"
   )
-  df.PS.strata         <- res.PS.strata$data
-  df.PS.strata$stratum <- as.integer( df.PS.strata$`_strata_` )
+  df.PS.strata              <- res.PS.strata$data
+  df.PS.strata$stratum_true <- as.integer( df.PS.strata$`_strata_` )
 
   # generate outcome within each stratum
   df.stratum.list <- lapply(1:nStrata, function(k){
     theta.stratum     <- theta
     theta.stratum[-1] <- theta.stratum[-1] + drift.beta[k]
     X.stratum         <- df.PS.strata %>%
-      filter(stratum == k)
+      filter(stratum_true == k)
     studyID.stratum   <- X.stratum$study
 
     df.stratum        <- get.weibull.surv(
@@ -472,8 +472,8 @@ sim.PSIPP <- function(
     df.stratum <- cbind(df.stratum,
                         X.stratum[, colnames(X)[! colnames(X) %in% c("(Intercept)", "treatment" )]]) %>%
       as.data.frame()
-    df.stratum$study   <- studyID.stratum
-    df.stratum$stratum <- k
+    df.stratum$study        <- studyID.stratum
+    df.stratum$stratum_true <- k
     return(df.stratum)
   })
   df.stratum <- do.call(rbind, df.stratum.list)
