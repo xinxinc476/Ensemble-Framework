@@ -18,7 +18,7 @@ grid       <- expand.grid(
 )
 
 ndatasets <- 5000  ## total number of data sets
-each.cl   <- 100 ## how many data sets to run on a single node
+each.cl   <- 50 ## how many data sets to run on a single node
 ncl       <- ceiling(ndatasets / each.cl) ## how many nodes per data set
 
 ## Repeat each row of the grid ncl times (want nrow(grid) <= 800 ideally)
