@@ -7,17 +7,18 @@ library(posterior)
 library(cmdstanr)
 library(psrwe)
 library(bridgesampling)
+library(collapse)
 library(loo)
 library(scoringutils)
 
 ## source wrappers
-wrapper.dir <- 'Sims/R/wrapper_sim'
-source(file.path(wrapper.dir, "generate_data.R"))
-source(file.path(wrapper.dir, "get_trt_effect.R"))
+wrapper.sim.dir <- 'R/wrapper_sim'
+source(file.path(wrapper.sim.dir, "generate_data.R"))
+source(file.path(wrapper.sim.dir, "get_trt_effect.R"))
 
-wrapper.dir <- 'Analysis/R/wrapper_glm'
-source(file.path(wrapper.dir, 'glm_stratified_pp.R'))
-source(file.path(wrapper.dir, 'glm_logml_stratified_pp.R'))
+wrapper.glm.dir <- 'R/wrapper_glm'
+source(file.path(wrapper.glm.dir, 'glm_stratified_pp.R'))
+source(file.path(wrapper.glm.dir, 'glm_logml_stratified_pp.R'))
 
 ## directory to store files
 save.dir   <- 'Sims/results'
@@ -32,8 +33,8 @@ if ( is.na(id ) )
 
 ## get this job's sim parameters
 grid.id      <- grid[id, ]
-rm(grid)
 seeds.id     <- seeds_list[grid.id$start:grid.id$end]
+rm(grid, seeds_list)
 nevents.id   <- as.integer(grid.id$nevents)
 n0events.id  <- as.integer(grid.id$n0events)
 cens.prop.id <- as.numeric(grid.id$cens.prop)
@@ -55,10 +56,15 @@ fmla       <- failcens ~ interval + treatment + sex + cage + node_bin
 fmla.psipp <- failcens ~ interval + treatment
 family     <- poisson("log")
 ps.formula <- ~ sex + cage + node_bin
-nStrata    <- 5 ## number of strata for analysis using PSIPP
+nStrata    <- 4 ## number of strata for analysis using PSIPP
 
 ## specify true value of treatment effect (difference in RFS probability at 2 years for treated v.s. untreated)
-#param_true <- as.numeric( -mle.curr[3]/exp(mle.curr[1]) )
+param_true <- readRDS(file = "Sims/R/trteff_true.rds")
+if( case.id == "PSIPP" ){
+  param_true <- param_true$trteff.true.psipp
+}else{
+  param_true <- param_true$trteff.true
+}
 
 ## setup MCMC parameters
 nburnin  <- 5000
@@ -70,7 +76,7 @@ for ( j in seq_len(ndatasets) ) {
   set.seed(seeds.id[j]) # set seed for generating current data
 
   ## generate current and historical time-to-event data sets
-  if( case.id == "UNEXCH " ){
+  if( case.id == "UNEXCH" ){
     data.list <- sim.UNEXCH(
       prop.cens     = cens.prop.id,
       nevents       = nevents.id,
@@ -122,7 +128,7 @@ for ( j in seq_len(ndatasets) ) {
       ps.formula    = ~ sex + cage + node_bin,
       nStrata       = 3,
       theta         = mle.curr,
-      drift.beta    = c(-0.1, 0, 0.1),
+      drift.beta    = c(-0.2, 0, 0.2),
       trt.prob      = 0.5
     )
   }else{
@@ -233,10 +239,11 @@ for ( j in seq_len(ndatasets) ) {
     "ref" = d.ref, "pp" = d.pp, "bhm" = d.bhm,
     "leap" = d.leap, "psipp" = d.psipp
   )
+  rm(d.ref, d.bhm, d.leap, d.pp, d.psipp)
 
   ## estimated weights from each model-averaging method
   wts.estim.j <- data.frame(
-    method  = c("ref", "pp", "bhm", "leap", "psipp")
+    method  = names(d.list)
   )
   wts.estim.j$logml     <- c(
     res.logml.ref, res.logml.pp, res.logml.bhm,
@@ -273,7 +280,6 @@ for ( j in seq_len(ndatasets) ) {
       return(
         get.surv.diff.2yr.psipp(
           post.samples = d,
-          res.strata = input.list.psipp$res.strata,
           breaks = input.list.psipp$breaks
         )
       )
@@ -293,7 +299,7 @@ for ( j in seq_len(ndatasets) ) {
   })
   trt.estim.j        <- t(trt.estim.j) %>%
     as.data.frame()
-  trt.estim.j$method <- c("ref", "pp", "bhm", "leap", "psipp")
+  trt.estim.j$method <- names(d.list)
   trt.estim.j        <- trt.estim.j[, c("method", colnames(trt.estim.j)[which(colnames(trt.estim.j) != "method")])]
 
   ## obtain posterior samples of treatment effects from each model-averaged prior
@@ -311,12 +317,14 @@ for ( j in seq_len(ndatasets) ) {
     as.data.frame()
   trt.estim.j2$method <- c("bma", "pbma", "pbma_BB", "stacking")
   trt.estim.j2        <- trt.estim.j2[, c("method", colnames(trt.estim.j2)[which(colnames(trt.estim.j2) != "method")])]
+  trt.estim.j         <- rbind(trt.estim.j, trt.estim.j2) %>%
+    as.data.frame()
   rm(trt.estim.j2, trt.effect.list, trt.effect.mtx)
 
-  trt.estim$param_true <- param_true
+  trt.estim.j$param_true <- param_true
   ## compute interval score
   ## interval score = 0.05/2 * ( (q97.5-q2.5) + 2/0.05 * max(0, q2.5 - param_true) + 2/0.05 * max(0, param_true - q97.5) )
-  trt.estim = trt.estim %>%
+  trt.estim.j             <- trt.estim.j %>%
     mutate(
       interval_score = scoringutils::interval_score(
         true_values = param_true, lower = `q2.5`, upper = `q97.5`,
@@ -329,12 +337,13 @@ for ( j in seq_len(ndatasets) ) {
     )
 
   ## add simulation scenario
-  trt.estim$n    <- n.id
-  trt.estim$a0   <- a0.id
-  trt.estim$case <- case.id
-  wts.estim$n    <- n.id
-  wts.estim$a0   <- a0.id
-  wts.estim$case <- case.id
+  trt.estim.j$nevents   <- nevents.id
+  trt.estim.j$cens.prop <- cens.prop.id
+  trt.estim.j$case.id   <- case.id
+
+  wts.estim.j$nevents   <- nevents.id
+  wts.estim.j$cens.prop <- cens.prop.id
+  wts.estim.j$case.id   <- case.id
 
   ## store results
   if(j == 1) {
@@ -345,17 +354,20 @@ for ( j in seq_len(ndatasets) ) {
     simres.wts <- rbind(simres.wts, wts.estim.j)
   }
 
-  if(j %% 5 == 0){
+  if(j %% 2 == 0){
     lst <- list(
       'id'      = id
-      , 'scen'  = grid.id[1:3]
+      , 'a0'    = a0.id
+      , 'scen'  = grid.id
       , 'start' = grid.id$start
       , 'end' = grid.id$start + j - 1
       , 'simres.trt'  = simres.trt
       , 'simres.wts'  = simres.wts
     )
-    temp.dir <- "/work/users/x/i/xinxinc/super_prior/Sims_small/in_progress"
-    temp.filename <- file.path(temp.dir, paste0('id_', id, '_', 'n_', n.id, '_a0_', a0.id, '_case_', case.id,
+    temp.dir <- "/work/users/x/i/xinxinc/super_prior/Sims/in_progress"
+    temp.filename <- file.path(temp.dir, paste0('id_', id, '_', 'nevents_', nevents.id,
+                                                '_censorProp_', cens.prop.id,
+                                                '_case_', case.id,
                                                 '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
     saveRDS(lst, temp.filename)
   }
@@ -365,7 +377,8 @@ for ( j in seq_len(ndatasets) ) {
 ## SAVE THE RESULTS
 lst <- list(
   'id'      = id
-  , 'scen'  = grid.id[1:3]
+  , 'a0'    = a0.id
+  , 'scen'  = grid.id
   , 'simres.trt'  = simres.trt
   , 'simres.wts'  = simres.wts
 )
