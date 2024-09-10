@@ -1,5 +1,3 @@
-remove(list = ls())
-
 library(tidyverse)
 library(survival)
 library(hdbayes)
@@ -21,9 +19,9 @@ source(file.path(wrapper.glm.dir, 'glm_stratified_pp.R'))
 source(file.path(wrapper.glm.dir, 'glm_logml_stratified_pp.R'))
 
 ## directory to store files
-save.dir   <- 'Sims/results'
+save.dir   <- 'Sims/Results'
 grid       <- readRDS(file = "Sims/R/grid.rds")
-seeds_list <- readRDS(file = 'Sims/R/seeds_list.rds')
+seeds_list <- readRDS(file = "Sims/R/seeds_list.rds")
 
 
 ## get task ID
@@ -56,15 +54,7 @@ fmla       <- failcens ~ interval + treatment + sex + cage + node_bin
 fmla.psipp <- failcens ~ interval + treatment
 family     <- poisson("log")
 ps.formula <- ~ sex + cage + node_bin
-nStrata    <- 4 ## number of strata for analysis using PSIPP
-
-## specify true value of treatment effect (difference in RFS probability at 2 years for treated v.s. untreated)
-param_true <- readRDS(file = "Sims/R/trteff_true.rds")
-if( case.id == "PSIPP" ){
-  param_true <- param_true$trteff.true.psipp
-}else{
-  param_true <- param_true$trteff.true
-}
+nStrata    <- 3 ## number of strata for analysis using PSIPP
 
 ## setup MCMC parameters
 nburnin  <- 5000
@@ -206,6 +196,8 @@ for ( j in seq_len(ndatasets) ) {
     formula = fmla, family = family, data.list = input.list.nonpsipp$data.list,
     offset.list = offset.list.leap,
     K = K,
+    gamma.upper = 1,
+    gamma.lower = 0,
     iter_warmup = nburnin,
     iter_sampling = nsamples,
     chains = nchains
@@ -295,7 +287,7 @@ for ( j in seq_len(ndatasets) ) {
   })
   trt.estim.j <- sapply(1:length(trt.effect.list), function(i){
     s <- trt.effect.list[[i]]
-    c(mean = mean(s), sd = sd(s), quantile2(s, probs = c(0.025, 0.975)))
+    c(mean = mean(s), sd = sd(s), posterior::quantile2(s, probs = c(0.025, 0.975)))
   })
   trt.estim.j        <- t(trt.estim.j) %>%
     as.data.frame()
@@ -311,7 +303,7 @@ for ( j in seq_len(ndatasets) ) {
   })
   trt.estim.j2 <- sapply(1:length(trt.effect.list), function(i){
     s <- trt.effect.list[[i]]
-    c(mean = mean(s), sd = sd(s), quantile2(s, probs = c(0.025, 0.975)))
+    c(mean = mean(s), sd = sd(s), posterior::quantile2(s, probs = c(0.025, 0.975)))
   })
   trt.estim.j2 <- t(trt.estim.j2) %>%
     as.data.frame()
@@ -320,30 +312,6 @@ for ( j in seq_len(ndatasets) ) {
   trt.estim.j         <- rbind(trt.estim.j, trt.estim.j2) %>%
     as.data.frame()
   rm(trt.estim.j2, trt.effect.list, trt.effect.mtx)
-
-  trt.estim.j$param_true <- param_true
-  ## compute interval score
-  ## interval score = 0.05/2 * ( (q97.5-q2.5) + 2/0.05 * max(0, q2.5 - param_true) + 2/0.05 * max(0, param_true - q97.5) )
-  trt.estim.j             <- trt.estim.j %>%
-    mutate(
-      interval_score = scoringutils::interval_score(
-        true_values = param_true, lower = `q2.5`, upper = `q97.5`,
-        interval_range = 95, weigh = T
-      ),
-      diff = mean - param_true,
-      diff_sq = diff^2,
-      ci.ind  = ifelse(param_true >= `q2.5` & param_true <= `q97.5`, 1, 0),
-      log_var = ifelse(sd > 0, log(sd^2), NA)
-    )
-
-  ## add simulation scenario
-  trt.estim.j$nevents   <- nevents.id
-  trt.estim.j$cens.prop <- cens.prop.id
-  trt.estim.j$case.id   <- case.id
-
-  wts.estim.j$nevents   <- nevents.id
-  wts.estim.j$cens.prop <- cens.prop.id
-  wts.estim.j$case.id   <- case.id
 
   ## store results
   if(j == 1) {
@@ -354,7 +322,7 @@ for ( j in seq_len(ndatasets) ) {
     simres.wts <- rbind(simres.wts, wts.estim.j)
   }
 
-  if(j %% 2 == 0){
+  if(j %% 2 == 1){
     lst <- list(
       'id'      = id
       , 'a0'    = a0.id
