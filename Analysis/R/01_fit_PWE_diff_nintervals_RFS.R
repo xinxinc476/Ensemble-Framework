@@ -16,7 +16,7 @@ nchains  <- 1
 
 ## Obtain scenarios for computation
 priors    <- c('ref', 'pp_0.2', 'pp_0.5', 'pp_0.8',  'psipp', 'bhm', 'commensurate', 'leap', 'npp')
-J         <- 1:10
+J         <- 2:15
 scenarios <- expand.grid(
   J = J, priors = priors
   , stringsAsFactors = FALSE
@@ -28,7 +28,8 @@ if ( is.na(id) )
   id <- 1
 
 ## Directory to save results
-save.dir <- '/work/users/x/i/xinxinc/super_prior/PWE_choose_nintervals_RFS'
+#save.dir <- '/work/users/x/i/xinxinc/super_prior/PWE_choose_nintervals_RFS'
+save.dir <- 'Analysis/Results'
 
 scen     <- scenarios[id, ]
 prior.id <- scen$priors
@@ -39,7 +40,7 @@ filename <- file.path(save.dir, paste0('PWE_id_', id, "_", prior.id, '_ninterval
 
 
 ## source wrappers
-wrapper.dir <- '~/projects/super_prior/Analysis/R/wrapper_glm'
+wrapper.dir <- 'R/wrapper_glm'
 source(file.path(wrapper.dir, 'wrapper_surv.R'))
 source(file.path(wrapper.dir, 'get_loglik.R'))
 if (prior.id == "psipp"){
@@ -294,6 +295,8 @@ if ( prior.id == "psipp" ){
       formula = fmla, family = family, data.list = data.list,
       offset.list = offset.list,
       K = K,
+      gamma.upper = 1,
+      gamma.lower = 0,
       iter_warmup = nburnin,
       iter_sampling = nsamples,
       chains = nchains
@@ -302,8 +305,7 @@ if ( prior.id == "psipp" ){
       post.samples = d,
       iter_warmup = nburnin + 3000,
       iter_sampling = nsamples + 3000,
-      chains = nchains,
-      bridge.args = list(method = "warp3")
+      chains = nchains
     )
 
   }else{
@@ -336,3 +338,4 @@ if ( prior.id == "psipp" ){
 }
 
 saveRDS(res, filename)
+
