@@ -513,14 +513,31 @@ preprocess.data.list <- function(
 
   if( is.psipp ){
     nBorrow    <- nrow(data.list[[2]])
-    res.strata <- get.strata.data(
-      data.list       = data.list,
-      ps_fml_covs     = ps.formula,
-      v_arm           = "treatment",
-      ctl_arm_level   = 0,
-      borrow_ctl_only = FALSE,
-      nstrata         = nStrata,
-      total_borrow    = nBorrow
+    res.strata  <- tryCatch(
+      {get.strata.data(
+        data.list       = data.list,
+        ps_fml_covs     = ps.formula,
+        v_arm           = "treatment",
+        ctl_arm_level   = 0,
+        borrow_ctl_only = FALSE,
+        nstrata         = nStrata,
+        total_borrow    = nBorrow
+      )}, error = function(err) {
+        print(paste("Error: ", err))
+        return(
+          ## treat RCT as single-arm study
+          ## as we want to borrow from both treated and untreated)
+          get.strata.data(
+            data.list       = data.list,
+            ps_fml_covs     = ps.formula,
+            v_arm           = NULL,
+            ctl_arm_level   = NULL,
+            borrow_ctl_only = FALSE,
+            nstrata         = nStrata,
+            total_borrow    = nBorrow
+          )
+        )
+      }
     )
     data.list   <- res.strata$data.list
     strata.list <- res.strata$strata.list
