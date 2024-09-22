@@ -322,23 +322,21 @@ for ( j in seq_len(ndatasets) ) {
     simres.wts <- rbind(simres.wts, wts.estim.j)
   }
 
-  if(j %% 2 == 1){
-    lst <- list(
-      'id'      = id
-      , 'a0'    = a0.id
-      , 'scen'  = grid.id
-      , 'start' = grid.id$start
-      , 'end' = grid.id$start + j - 1
-      , 'simres.trt'  = simres.trt
-      , 'simres.wts'  = simres.wts
-    )
-    temp.dir <- "/work/users/x/i/xinxinc/super_prior/Sims/in_progress"
-    temp.filename <- file.path(temp.dir, paste0('id_', id, '_', 'nevents_', nevents.id,
-                                                '_censorProp_', cens.prop.id,
-                                                '_case_', case.id,
-                                                '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
-    saveRDS(lst, temp.filename)
-  }
+  lst <- list(
+    'id'      = id
+    , 'a0'    = a0.id
+    , 'scen'  = grid.id
+    , 'start' = grid.id$start
+    , 'end' = grid.id$start + j - 1
+    , 'simres.trt'  = simres.trt
+    , 'simres.wts'  = simres.wts
+  )
+  temp.dir <- "Sims/Results/in_progress"
+  temp.filename <- file.path(temp.dir, paste0('id_', id, '_', 'nevents_', nevents.id,
+                                              '_censorProp_', cens.prop.id,
+                                              '_case_', case.id,
+                                              '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
+  saveRDS(lst, temp.filename)
   print(paste0("#################### Completed iteration ", j, " ######################"))
 
 }
