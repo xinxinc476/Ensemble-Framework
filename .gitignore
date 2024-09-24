@@ -8,3 +8,4 @@ Stan/glm_pp
 Stan/glm_stratified_pp
 *.Rproj
 *.rds
+/Sims_enar
