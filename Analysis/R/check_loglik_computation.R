@@ -29,7 +29,7 @@ breaks  <- breaks[-nbreaks]
 family <- poisson("log")
 fmla   <- failcens ~ interval + treatment + sex + cage + node_bin
 
-wrapper.dir <- 'Analysis/R/wrapper_glm'
+wrapper.dir <- 'R/wrapper_glm'
 source(file.path(wrapper.dir, 'wrapper_surv.R'))
 
 # transform data into counting process format
@@ -51,8 +51,7 @@ d <- glm.post(
   chains = 1
 )
 
-post.samples <- rbind(colMeans(d), d)
-loglik       <- get.loglik.glm(post.samples)
+loglik       <- get.loglik.glm(d)
 loglik.draws <- rowSums( loglik ) # log-likelihood from poisson model
 
 # function to compute log-likelihood under the PWE model
@@ -92,8 +91,8 @@ pwe.loglik <- function(beta, log_hazard) {
   return(loglik)
 }
 
-loglik.draws.pwe <- sapply(1:nrow(post.samples), function(i){
-  param <- post.samples[i, ]
+loglik.draws.pwe <- sapply(1:nrow(d), function(i){
+  param <- d[i, ]
   beta.i <- suppressWarnings(
     as.numeric(param[covariate.name])
   )
@@ -113,3 +112,6 @@ all.equal(
   diff.loglik[1],
   sum(curr.poisson$log_exposue * curr.poisson$failcens)
 ) # TRUE
+
+loglik2 <- loglik %r-% (curr.poisson$log_exposue * curr.poisson$failcens)
+all.equal(rowSums( loglik2 ), loglik.draws.pwe ) # TRUE
