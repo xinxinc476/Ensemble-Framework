@@ -96,8 +96,10 @@ if ( prior.id == "psipp" ){
   res.strata <- get.strata.data(
     data.list       = list(curr, hist),
     ps_fml_covs     = ps.formula,
-    v_arm           = "treatment",
-    ctl_arm_level   = 0,
+    #v_arm           = "treatment",
+    #ctl_arm_level   = 0,
+    v_arm           = NULL,
+    ctl_arm_level   = NULL,
     borrow_ctl_only = FALSE,
     nstrata         = nStrata,
     total_borrow    = nBorrow
