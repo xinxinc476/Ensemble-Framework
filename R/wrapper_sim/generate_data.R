@@ -365,17 +365,26 @@ sim.UNEXCH <- function(
     trt.prob      = 0.5
 ){
   # equivalent to simulate under LEAP assumption with `exch` = 0
-  data.list <- sim.LEAP(
+  data      <- get.weibull.surv(
+    X = X,
+    theta = theta,
     prop.cens = prop.cens,
-    nevents   = nevents,
-    n0events  = n0events,
-    X         = X,
-    X0        = X0,
-    theta     = theta,
-    theta0    = theta0,
-    exch      = 0,
-    trt.prob  = trt.prob
+    nevents = nevents,
+    trt.prob = trt.prob,
+    bootstrap = TRUE
   )
+
+  # generate historical data using theta0 & X0
+  histdata  <- get.weibull.surv(
+    X = X0,
+    theta = theta0,
+    prop.cens = prop.cens,
+    nevents = n0events,
+    trt.prob = trt.prob,
+    bootstrap = TRUE
+  )
+
+  data.list <- list(curr = data, hist = histdata)
   return(data.list)
 }
 
@@ -513,31 +522,16 @@ preprocess.data.list <- function(
 
   if( is.psipp ){
     nBorrow    <- nrow(data.list[[2]])
-    res.strata  <- tryCatch(
-      {get.strata.data(
-        data.list       = data.list,
-        ps_fml_covs     = ps.formula,
-        v_arm           = "treatment",
-        ctl_arm_level   = 0,
-        borrow_ctl_only = FALSE,
-        nstrata         = nStrata,
-        total_borrow    = nBorrow
-      )}, error = function(err) {
-        print(paste("Error: ", err))
-        return(
-          ## treat RCT as single-arm study
-          ## as we want to borrow from both treated and untreated)
-          get.strata.data(
-            data.list       = data.list,
-            ps_fml_covs     = ps.formula,
-            v_arm           = NULL,
-            ctl_arm_level   = NULL,
-            borrow_ctl_only = FALSE,
-            nstrata         = nStrata,
-            total_borrow    = nBorrow
-          )
-        )
-      }
+    ## treat RCT as single-arm study
+    ## as we want to borrow from both treated and untreated)
+    res.strata  <- get.strata.data(
+      data.list       = data.list,
+      ps_fml_covs     = ps.formula,
+      v_arm           = NULL,
+      ctl_arm_level   = NULL,
+      borrow_ctl_only = FALSE,
+      nstrata         = nStrata,
+      total_borrow    = nBorrow
     )
     data.list   <- res.strata$data.list
     strata.list <- res.strata$strata.list
