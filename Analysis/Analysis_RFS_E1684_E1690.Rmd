@@ -88,6 +88,50 @@ tab
 # Frequentist Analysis
 
 ```{r}
+## KM plots
+library(survminer)
+library(ggpubr)
+
+curr2 <- df[df$Study == "E1690", ]
+hist2 <- df[df$Study == "E1684", ]
+
+km_fit1 <- survfit(Surv(failtime, failcens) ~ Treatment, data = curr2)
+km_fit2 <- survfit(Surv(failtime, failcens) ~ Treatment, data = hist2)
+
+p1   <- survminer::ggsurvplot(km_fit1, 
+                      data = curr2, 
+                      pval = TRUE,
+                      conf.int = TRUE,
+                      palette = c("#999999", "#CC79A7"),
+                      legend.labs = c("control", "treatment"),
+                      ggtheme = theme_bw())$plot + 
+  labs(subtitle = "E1690", color = "Treatment", fill = "Treatment", x = "time", y = "survival probability") +
+  theme(legend.position = "bottom",
+        legend.text=element_text(size=10),
+        legend.key.width= unit(2, 'cm'), 
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+p2   <- survminer::ggsurvplot(km_fit2, 
+                      data = hist2,
+                      pval = TRUE,
+                      conf.int = TRUE,
+                      palette = c("#999999", "#CC79A7"),
+                      legend.labs = c("control", "treatment"),
+                      ggtheme = theme_bw())$plot + 
+  labs(subtitle = "E1684", color = "Treatment", fill = "Treatment", x = "time", y = "survival probability") +
+  theme(legend.position = "bottom",
+        legend.text=element_text(size=10),
+        legend.key.width= unit(2, 'cm'), 
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+KM_plts <- ggarrange(p2, p1, ncol=2, nrow=1, common.legend = TRUE, legend="bottom")
+annotate_figure(KM_plts, top = text_grob("Kaplan-Meier Curves for E1684 and E1690 Data Sets", face = "bold", size = 14))
+
+# width: 680, height: 420
+```
+
+
+```{r}
 ## formula for current and historical data (Cox PH model)
 fmla     <- Surv(failtime, failcens) ~ treatment + sex + cage + node_bin
 
@@ -278,6 +322,11 @@ estim <- as.data.frame(estim)
 estim <- cbind(prior = priors, estim) %>%
   as.data.frame()
 rownames(estim) <- NULL
+
+# compute probability of treatment effect > 0
+estim$prob_greater_0 <- sapply(surv.diff.list, function(l){
+  round(mean(l > 0), 3)
+})
 estim
 ```
 
@@ -344,7 +393,8 @@ d.surv.diff.stacking <- sample.model.avg.prior(wts = stacking_wts, samples.mtx =
 
 
 estim2 <- lapply(list(d.surv.diff.bma, d.surv.diff.pbma, d.surv.diff.pbma.BB, d.surv.diff.stacking), function(l){
-  round(c(mean = mean(l), sd = sd(l), quantile2(l, probs = c(0.5, 0.025, 0.975))), 3)
+  round(c(mean = mean(l), sd = sd(l), quantile2(l, probs = c(0.5, 0.025, 0.975)),
+          prob_greater_0 = mean(l > 0)), 3)
 })
 estim2 <- do.call(rbind, estim2) %>%
   as.data.frame()
@@ -353,6 +403,7 @@ estim2 <- cbind(
   estim2
 ) %>% as.data.frame()
 
+estim_all <- rbind(estim, estim2) %>% as.data.frame()
 estim_all
 ```
 
@@ -378,7 +429,7 @@ estim_all$prior <- recode(
   bhm = "BHM", commensurate = "Commensurate"
 )
 rownames(estim_all) <- estim_all$prior
-estim_tab <- estim_all[c("Reference", "BHM", "Commensurate", "LEAP", "NPP", "PP", "BMA", "Stacking"), c("prior", "mean", "q2.5", "q97.5")]
+estim_tab <- estim_all[c("Reference", "BHM", "Commensurate", "LEAP", "NPP", "PP", "BMA", "Stacking"), c("prior", "mean", "sd", "q2.5", "q97.5", "prob_greater_0")]
 rownames(estim_tab) <- NULL
 
 # construct credible interval as string
@@ -397,16 +448,16 @@ ndigits <- 3
 estim_tab <- estim_tab %>%
   mutate(CI = textci(`q2.5`, `q97.5`, digits = ndigits))
 
-estim_tab$weights_BMA <- c(formatC(tab_wts$BMA, digits = ndigits, format = 'f'), '----', '----')
-estim_tab$weights_stacking <- c(formatC(tab_wts$Stacking, digits = ndigits, format = 'f'), '----', '----')
+estim_tab$weights_BMA <- c(formatC(tab_wts$BMA, digits = ndigits, format = 'f'), '---', '---')
+estim_tab$weights_stacking <- c(formatC(tab_wts$Stacking, digits = ndigits, format = 'f'), '---', '---')
 
 estim_tab$prior[which(estim_tab$prior == "BMA")] <- "Ensemble (BMA Weights)"
 estim_tab$prior[which(estim_tab$prior == "Stacking")] <- "Ensemble (Stacking Weights)"
 
 tab <- estim_tab %>%
-  dplyr::select(prior, mean, CI, weights_BMA, weights_stacking) %>%
+  dplyr::select(prior, mean, sd, CI, prob_greater_0, weights_BMA, weights_stacking) %>%
   kable("latex",
-      col.names = c('Method', 'Mean', '$95\\%$ CI', 'BMA Weight', 'Stacking Weight'),
+      col.names = c('Method', 'Mean', "SD", '$95\\%$ CI', 'P($\\Delta > 0$)', 'BMA Weight', 'Stacking Weight'),
       digits = ndigits, align = 'c',
       booktabs=TRUE, escape = FALSE,
       caption = 'Posterior Estimates of $\\Delta$ with Model Weights from BMA and Stacking')
