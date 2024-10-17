@@ -3,7 +3,7 @@ library(tidyverse)
 library(psrwe)
 library(dplyr)
 
-mle.list <- readRDS(file = "Sims/R/mle_X_curr_hist.rds")
+mle.list <- readRDS(file = "/nas/longleaf/home/xinxinc/projects/super_prior/Sims/R/mle_X_curr_hist.rds")
 mle.curr <- mle.list$mle.curr
 mle.hist <- mle.list$mle.hist
 design.mtx.curr <- mle.list$design.mtx.curr
@@ -499,7 +499,7 @@ sim.PSIPP <- function(
 
 
 ## source wrappers
-wrapper.dir <- 'R/wrapper_glm'
+wrapper.dir <- '/nas/longleaf/home/xinxinc/projects/super_prior/R/wrapper_glm'
 source(file.path(wrapper.dir, 'wrapper_surv.R'))
 source(file.path(wrapper.dir, 'get_strata_data.R'))
 
@@ -522,9 +522,7 @@ preprocess.data.list <- function(
 
   if( is.psipp ){
     nBorrow    <- nrow(data.list[[2]])
-    ## treat RCT as single-arm study
-    ## as we want to borrow from both treated and untreated)
-    res.strata  <- get.strata.data(
+    res.strata <- get.strata.data(
       data.list       = data.list,
       ps_fml_covs     = ps.formula,
       v_arm           = NULL,
