@@ -88,22 +88,6 @@ get.strata.data = function(
 }
 
 
-#' get starting and ending indices for a vector of stratum ID
-#'
-#' @param x a vector of integers giving stratum assignment
-#'
-getIndices <- function(x){
-  x           = as.integer(x)
-  K           = max(x)
-  num.obs     = as.numeric( table(x) )
-  end.index   = cumsum(num.obs)
-  start.index = c(1, end.index[-K] + 1)
-  return(
-    list(start = start.index, end = end.index)
-  )
-}
-
-
 #' function to get Stan data for PSIPP
 get.aft.stan.data.psipp = function(
     formula,  ## the RHS typically only includes treatment indicator
@@ -144,11 +128,11 @@ get.aft.stan.data.psipp = function(
   ## get the number of strata
   K = as.integer( max( data$stratum, histdata$stratum ) )
   
-  ## get starting and ending indices for each stratum
-  idx.obs  = getIndices(data$stratum[which(eventind == 1)])
-  idx.cen  = getIndices(data$stratum[which(eventind == 0)])
-  idx0.obs = getIndices(histdata$stratum[which(eventind0 == 1)])
-  idx0.cen = getIndices(histdata$stratum[which(eventind0 == 0)])
+  ## get strata assignment for current and historical data
+  stratumID.obs  = data$stratum[which(eventind == 1)]
+  stratumID.cen  = data$stratum[which(eventind == 0)]
+  stratumID0.obs = histdata$stratum[which(eventind0 == 1)]
+  stratumID0.cen = histdata$stratum[which(eventind0 == 0)]
   
   ## check a0.strata values
   if ( !( is.vector(a0.strata) & (length(a0.strata) %in% c(1, K)) ) )
@@ -198,14 +182,10 @@ get.aft.stan.data.psipp = function(
     'X0_obs'          = X0[which(eventind0 == 1), ],
     'X0_cen'          = X0[which(eventind0 == 0), ],
     'K'               = K,
-    'start_idx_obs'   = idx.obs$start,
-    'end_idx_obs'     = idx.obs$end,
-    'start_idx_cen'   = idx.cen$start,
-    'end_idx_cen'     = idx.cen$end,
-    'start_idx0_obs'  = idx0.obs$start,
-    'end_idx0_obs'    = idx0.obs$end,
-    'start_idx0_cen'  = idx0.cen$start,
-    'end_idx0_cen'    = idx0.cen$end,
+    'stratumID_obs'   = stratumID.obs,
+    'stratumID_cen'   = stratumID.cen,
+    'stratumID0_obs'  = stratumID0.obs,
+    'stratumID0_cen'  = stratumID0.cen,
     'a0s'             = a0.strata,
     'beta_mean'       = beta.mean,
     'beta_sd'         = beta.sd,
@@ -312,34 +292,37 @@ aft.psipp.lognc = function(
     
     Eta0_obs       = data$X0_obs %*% beta
     Eta0_cen       = data$X0_cen %*% beta
-    start_idx0_obs = data$start_idx0_obs
-    end_idx0_obs   = data$end_idx0_obs
-    start_idx0_cen = data$start_idx0_cen
-    end_idx0_cen   = data$end_idx0_cen
+    stratumID0_obs = data$stratumID0_obs
+    stratumID0_cen = data$stratumID0_cen
     y0_obs         = data$y0_obs
     y0_cen         = data$y0_cen
     a0s            = data$a0s
     
+    eta0_obs = sapply(1:length(stratumID0_obs), function(i){
+      Eta0_obs[i, stratumID0_obs[i]]
+    })
+    eta0_cen = sapply(1:length(stratumID0_cen), function(i){
+      Eta0_cen[i, stratumID0_cen[i]]
+    })
+    data_lp = sum( a0s[stratumID0_obs] * hdbayes:::aft_model_obs_lpdf(y0_obs, eta0_obs, scale[stratumID0_obs], data$dist) ) +
+      sum( a0s[stratumID0_cen] * hdbayes:::aft_model_cen_lpdf(y0_cen, eta0_cen, scale[stratumID0_cen], data$dist) )
+ 
     if( !data$is_prior ){
       Eta_obs        = data$X_obs %*% beta
       Eta_cen        = data$X_cen %*% beta
-      start_idx_obs  = data$start_idx_obs
-      end_idx_obs    = data$end_idx_obs
-      start_idx_cen  = data$start_idx_cen
-      end_idx_cen    = data$end_idx_cen
+      stratumID_obs  = data$stratumID_obs
+      stratumID_cen  = data$stratumID_cen
       y_obs          = data$y_obs
       y_cen          = data$y_cen
-      data_lp        = sum( sapply(1:K, function(k){
-        hdbayes:::aft_model_lp(y_obs[ start_idx_obs[k]:end_idx_obs[k] ], y_cen[ start_idx_cen[k]:end_idx_cen[k] ], 
-                               Eta_obs[start_idx_obs[k]:end_idx_obs[k], k], Eta_cen[start_idx_cen[k]:end_idx_cen[k], k], scale[k], data$dist) + 
-          a0s[k] * hdbayes:::aft_model_lp(y0_obs[ start_idx0_obs[k]:end_idx0_obs[k] ], y0_cen[ start_idx0_cen[k]:end_idx0_cen[k] ], 
-                                          Eta0_obs[start_idx0_obs[k]:end_idx0_obs[k], k], Eta0_cen[start_idx0_cen[k]:end_idx0_cen[k], k], scale[k], data$dist)
-      }) )
-    }else{
-      data_lp    = sum( sapply(1:K, function(k){
-        a0s[k] * hdbayes:::aft_model_lp(y0_obs[ start_idx0_obs[k]:end_idx0_obs[k] ], y0_cen[ start_idx0_cen[k]:end_idx0_cen[k] ], 
-                                        Eta0_obs[start_idx0_obs[k]:end_idx0_obs[k], k], Eta0_cen[start_idx0_cen[k]:end_idx0_cen[k], k], scale[k], data$dist)
-      }) )
+      
+      eta_obs        = sapply(1:length(stratumID_obs), function(i){
+        Eta_obs[i, stratumID_obs[i]]
+      })
+      eta_cen        = sapply(1:length(stratumID_cen), function(i){
+        Eta_cen[i, stratumID_cen[i]]
+      })
+      data_lp        = data_lp + sum( hdbayes:::aft_model_obs_lpdf(y_obs, eta_obs, scale[stratumID_obs], data$dist) ) +
+        sum( hdbayes:::aft_model_cen_lpdf(y_cen, eta_cen, scale[stratumID_cen], data$dist) )
     }
     return(data_lp + prior_lp)
   }

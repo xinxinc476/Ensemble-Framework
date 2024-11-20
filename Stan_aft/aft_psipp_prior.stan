@@ -69,10 +69,8 @@ data {
   matrix[n0_obs,p]                     X0_obs;          // design mtx for historical data (uncensored)
   matrix[n0_cen,p]                     X0_cen;          // design mtx for historical data (censored)
   int<lower = 0>                       K;               // number of strata
-  array[K] int<lower=1, upper=n0_obs>  start_idx0_obs;  // starting index of each stratum in historical data (uncensored)
-  array[K] int<lower=1, upper=n0_obs>  end_idx0_obs;    // ending index of each stratum in historical data (uncensored)
-  array[K] int<lower=1, upper=n0_cen>  start_idx0_cen;  // starting index of each stratum in historicaldata (censored)
-  array[K] int<lower=1, upper=n0_cen>  end_idx0_cen;    // ending index of each stratum in historical data (censored)
+  array[n0_obs] int<lower=1,upper=K>   stratumID0_obs;  // strata assignment for historical data (uncensored)
+  array[n0_cen] int<lower=1,upper=K>   stratumID0_cen;  // strata assignment for historical data (censored)
   vector<lower=0, upper=1>[K]          a0s;             // power prior parameter for each stratum
   vector[p]                            beta_mean;       // mean for normal initial prior on coefficients
   vector<lower=0>[p]                   beta_sd;         // sd for normal initial prior on coefficients
@@ -96,9 +94,14 @@ model {
     target += normal_lpdf( scaleVec[k] | scale_mean, scale_sd ) - scale_prior_lognc;
     // normal initial prior on beta
     target += normal_lpdf( betaMat[, k] | beta_mean, beta_sd );
-    // power prior
-    target += a0s[k] * aft_model_lp(y0_obs[ start_idx0_obs[k]:end_idx0_obs[k] ], y0_cen[ start_idx0_cen[k]:end_idx0_cen[k] ], 
-      Eta0_obs[start_idx0_obs[k]:end_idx0_obs[k], k], Eta0_cen[start_idx0_cen[k]:end_idx0_cen[k], k], scaleVec[k], dist);
+  }
+  
+  // power prior
+  for( i in 1:n0_obs ){
+    target += a0s[ stratumID0_obs[i] ] * aft_model_obs_lpdf(y0_obs[i] | Eta0_obs[i, stratumID0_obs[i]], scaleVec[ stratumID0_obs[i] ], dist);
+  }
+  for( i in 1:n0_cen ){
+    target += a0s[ stratumID0_cen[i] ] * aft_model_cen_lpdf(y0_cen[i] | Eta0_cen[i, stratumID0_cen[i]], scaleVec[ stratumID0_cen[i] ], dist);
   }
 }
 
