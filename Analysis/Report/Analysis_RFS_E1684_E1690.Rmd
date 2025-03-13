@@ -1,0 +1,934 @@
+---
+title: "Analysis of Replase-Free Survival (RFS) Time for (E1684, E1690) Data Sets"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(survival)
+library(hdbayes)
+library(posterior)
+library(ggplot2)
+library(latex2exp)
+library(loo)
+library(kableExtra)
+library(tables)
+
+source("~/Documents/UNC/Dissertation/super prior/Code/wrapper/sample_ensemble.R")
+```
+
+
+# Summary of Baseline Covariate
+
+```{r}
+## load data
+hist <- E1684
+curr <- E1690
+
+## replace 0 failure times with 0.50 days
+hist <- hist %>% mutate(failtime = if_else(failtime == 0, 0.50/365.25, failtime)) # 1 subject w/ failtime = 0
+curr <- curr %>% mutate(failtime = if_else(failtime == 0, 0.50/365.25, failtime)) # 10 subjects w/ failtime = 0
+
+## Center and scale age based on current data
+age_stats <- with(curr, c('mean' = mean(age), 'sd' = sd(age)))
+hist$cage <- ( hist$age - age_stats['mean'] ) / age_stats['sd']
+curr$cage <- ( curr$age - age_stats['mean'] ) / age_stats['sd']
+```
+
+```{r}
+library(gtsummary)
+
+## create summary table
+df       <- rbind(curr, hist) %>%
+  mutate(
+    Treatment = case_when(
+      treatment == 1 ~ "Treatment",
+      TRUE ~ "Control"
+    ),
+    Sex = factor(sex, levels = c(0, 1), labels = c("Male", "Female")),
+    `Having > 1 cancerous lymph node` = case_when(
+      `node_bin` == 1 ~ "Yes (> 1 node)",
+      TRUE ~ "No (0 or 1 node)"
+    ),
+    Age = age,
+    `Standardized Age` = cage
+  )
+df$Study <- rep(c("E1690", "E1684"), times = c(nrow(curr), nrow(hist)))
+
+tab <- df %>%
+  select(all_of(c("Treatment", "Sex", "Age", "Standardized Age", "Having > 1 cancerous lymph node", "Study"))) %>%
+  tbl_summary(
+    by = Study,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2
+  ) %>%
+  modify_header(label ~ "**Variable**",
+                `stat_1` ~ "E1684, N = 262",
+                `stat_2` ~ "E1690, N = 426")
+tab
+# show_header_names(tab)
+```
+
+
+
+# Frequentist Analysis
+
+```{r}
+## KM plots
+library(survminer)
+library(ggpubr)
+
+curr2 <- df[df$Study == "E1690", ]
+hist2 <- df[df$Study == "E1684", ]
+
+km_fit1 <- survfit(Surv(failtime, failcens) ~ Treatment, data = curr2)
+km_fit2 <- survfit(Surv(failtime, failcens) ~ Treatment, data = hist2)
+
+xlim_range <- c(0, 10)
+p1   <- survminer::ggsurvplot(km_fit1, 
+                      data = curr2, 
+                      pval = TRUE,
+                      conf.int = TRUE,
+                      palette = c("#999999", "#CC79A7"),
+                      legend.labs = c("control", "treatment"),
+                      ggtheme = theme_bw(),
+                      xlim = xlim_range)$plot + 
+  labs(subtitle = "E1690", color = "", fill = "", x = "time", y = "survival probability") +
+  theme(legend.position = "bottom",
+        legend.text=element_text(size=10),
+        legend.key.width= unit(2, 'cm'), 
+        plot.subtitle = element_text(hjust = 0.5, size = 12)) +
+  scale_x_continuous(limits = xlim_range, breaks = pretty(xlim_range))
+
+p2   <- survminer::ggsurvplot(km_fit2, 
+                      data = hist2,
+                      pval = TRUE,
+                      conf.int = TRUE,
+                      palette = c("#999999", "#CC79A7"),
+                      legend.labs = c("control", "treatment"),
+                      ggtheme = theme_bw(),
+                      xlim = xlim_range)$plot + 
+  labs(subtitle = "E1684", color = "", fill = "", x = "time", y = "survival probability") +
+  theme(legend.position = "bottom",
+        legend.text=element_text(size=10),
+        legend.key.width= unit(2, 'cm'), 
+        plot.subtitle = element_text(hjust = 0.5, size = 12)) +
+  scale_x_continuous(limits = xlim_range, breaks = pretty(xlim_range))
+
+KM_plts <- ggarrange(p2, p1, ncol=2, nrow=1, common.legend = TRUE, legend="bottom")
+annotate_figure(KM_plts, top = text_grob("Kaplan-Meier Curves for E1684 and E1690 Data Sets", face = "bold", size = 14))
+# width: 550, height: 330
+```
+
+
+```{r}
+## formula for current and historical data (Cox PH model)
+fmla     <- Surv(failtime, failcens) ~ treatment + sex + cage + node_bin
+
+## fit proportional hazards models on E1690 and E1684 data
+fit      <- coxph(formula = fmla, data = curr)
+fit.hist <- coxph(formula = fmla, data = hist)
+
+summary(fit)
+summary(fit.hist)
+```
+
+
+```{r}
+## combine Cox PH model estimates with summary of baseline covariates 
+tab.E1690.coxph <- coxph(
+  Surv(failtime, failcens) ~ Treatment + Sex + `Standardized Age` + `Having > 1 cancerous lymph node`,
+  data = df[df$Study == "E1690", ]
+) %>%
+  tbl_regression(
+    label = list(
+      `Sex` ~ "Sex",
+      `Standardized Age` ~ "Standardized Age",
+      `Having > 1 cancerous lymph node` ~ "Having > 1 cancerous lymph node"
+    ),
+    exponentiate = TRUE
+  ) %>%
+  modify_header(label ~ "**Variable**")  %>%
+  modify_column_hide(columns = p.value)
+
+tab.E1684.coxph <- coxph(
+  Surv(failtime, failcens) ~ Treatment + Sex + `Standardized Age` + `Having > 1 cancerous lymph node`,
+  data = df[df$Study == "E1684", ]
+) %>%
+  tbl_regression(
+    label = list(
+      `Sex` ~ "Sex",
+      `Standardized Age` ~ "Standardized Age",
+      `Having > 1 cancerous lymph node` ~ "Having > 1 cancerous lymph node"
+    ),
+    exponentiate = TRUE
+  ) %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_column_hide(columns = p.value)
+
+library(gt)
+tab.combined <- tbl_merge(
+  tbls = list(tab, tab.E1684.coxph, tab.E1690.coxph),
+  tab_spanner = c("**Summary Statistics**", "**Cox PH Model for E1684**", "**Cox PH Model for E1690**")
+) %>%
+  as_gt() %>%
+  #gt::tab_source_note("Cox PH Model: Cox proportional hazards (PH) regression model including Treatment, Sex, Standardized Age, and Having > 1 cancerous lymph node.")
+  gt::tab_footnote(
+    footnote = "Cox proportional hazards (PH) regression model including Treatment, Sex, Standardized Age, and Having > 1 cancerous lymph node.",
+    locations = cells_column_spanners(c("**Cox PH Model for E1684**", "**Cox PH Model for E1690**"))
+  )
+
+#tab.combined %>%
+#  gtsave(filename = "tab1_summary_stats.png", path = 'Figures')
+tab.combined
+```
+
+
+# Bayesian Analysis 
+
+We considered both a piecewise exponential (PWE) model (i.e., a proportional hazards model with a piece-wise constant baseline hazards) and a standard mixture cure rate model (referred to as the CurePWE model). The CurePWE model assumes that a fraction $\pi$ of the population is "cured", while the remaining $(1 - \pi)$ are susceptible to the event of interest. The survival function for the entire population is given by:
+$$S_{\text{pop}}(t) = \pi + (1 - \pi) S(t),$$
+where $S(t)$ represents the survival function of the non-cured individuals. We model $S(t)$ using a PWE model. All the covariates are incorporated through the PWE model.
+
+For both the PWE and CurePWE models, we considered the number of intervals ($J$) for the piecewise constant baseline hazards varying from 2 to 15. The cut points of these intervals were selected such that each interval consists of about the same number of events/relapses in the current data (E1690).
+
+For each model, we considered the following list of priors for analysis: the reference prior, Bayesian hierarchical model (BHM), commensurate prior (CP), power prior (PP) with the discounting parameter $a_0 = 0.5$, normalized power prior (NPP), latent exchangeability prior (LEAP), and propensity score-integrated power prior (PSIPP). For historical data priors, information are borrowed on both the treatment and control arms.
+
+The goal is to conduct posterior inference on the difference in 2-year RFS probabilities between the treatment and control arm.
+
+```{r}
+## load compiled analysis results
+results.dir <- "~/Documents/UNC/Dissertation/super prior/Code/Analysis/Results"
+res         <- readRDS(file = file.path(results.dir, "compiled_analysis_results.rds"))
+```
+
+
+## Predicted Difference in 2-Year Survival Probabilities from Individual Priors
+
+```{r}
+loo.list       <- res$loo.list
+surv.diff.list <- res$surv.diff.list
+logml.list     <- res$logml.list
+estim  <- res$estim
+priors <- res$priors
+models <- res$models
+
+estim <- as.data.frame(estim)
+estim <- cbind(model = models, prior = priors, estim) %>%
+  as.data.frame()
+rownames(estim) <- NULL
+
+# compute probability of treatment effect > 0
+estim$prob_greater_0 <- sapply(surv.diff.list, function(l){
+  round(mean(l > 0), 3)
+})
+head(estim)
+```
+
+
+## Weights for Individual Priors in Ensemble Methods
+
+```{r}
+## BMA weights
+logml.vals <- lapply(logml.list, function(l){
+  l$logml
+})
+logml.vals <- unlist(logml.vals)
+## assume uniform initial construct probabilities
+post.prob <- bridgesampling::post_prob(logml.vals)
+
+lpd_point  <- sapply(loo.list, function(l){
+    l$pointwise[,"elpd_loo"]
+})
+pbma_wts     <- pseudobma_weights(lpd_point, BB=FALSE)
+pbma_BB_wts  <- pseudobma_weights(lpd_point) # default is BB=TRUE
+stacking_wts <- stacking_weights(lpd_point)
+
+wts.tab <- data.frame(
+  model = estim$model,
+  prior = estim$prior,
+  "BMA" = post.prob,
+  "Pseudo-BMA" = pbma_wts,
+  "Pseudo-BMA+" = pbma_BB_wts, ## Pseudo-BMA with Bayesian bootstrap
+  "Stacking" = stacking_wts
+)
+rownames(wts.tab) <- NULL
+colnames(wts.tab)[4:5] <- c("Pseudo-BMA", "Pseudo-BMA+")
+
+model_order <- c(paste0("PWE (J = ", 2:15, ")"), paste0("CurePWE (J = ", 2:15, ")"))
+
+wts.tab <- wts.tab %>%
+  mutate(model = factor(model, levels = model_order)) %>%
+  arrange(prior, model)
+
+head(wts.tab %>% mutate(across(where(is.numeric), \(x) round(x, 3))))
+```
+
+```{r}
+## sum weights from J = 2 to J = 15 for the PWE/CurePWE model under each prior
+wts.tab_transformed <- wts.tab %>%
+  mutate(is_CurePWE = grepl("CurePWE \\(J = \\d+\\)", model)) %>%
+  group_by(prior, CurePWE_group = if_else(is_CurePWE, "CurePWE", "PWE")) %>%
+  summarize(
+    BMA = sum(BMA, na.rm = TRUE),
+    `Pseudo-BMA` = sum(`Pseudo-BMA`, na.rm = TRUE),
+    `Pseudo-BMA+` = sum(`Pseudo-BMA+`, na.rm = TRUE),
+    Stacking = sum(Stacking, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rename(model = CurePWE_group)
+
+wts.tab_transformed <- wts.tab_transformed[, c("model", "prior", colnames(wts.tab_transformed)[-(1:2)])]
+```
+
+
+```{r}
+wts.tab_transformed <- wts.tab_transformed %>%
+  mutate(
+    prior = factor(prior, levels = c("ref", "bhm", "cp", "leap", "npp", "pp", "psipp")), 
+    model = factor(model, levels = c("PWE", "CurePWE"))
+  ) %>%
+  arrange(model, prior)
+
+wts.tab_transformed %>% mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+
+### Create Weight Plot
+
+
+```{r}
+# Transform the data to a long format
+wts_transformed_long <- wts.tab_transformed %>%
+  pivot_longer(cols = c(BMA, `Pseudo-BMA`, `Pseudo-BMA+`, Stacking), 
+               names_to = "method", values_to = "weight")
+
+# recode prior
+wts_transformed_long$prior <- recode(
+  wts_transformed_long$prior, leap = "LEAP", npp = "NPP", pp = "PP~(a[0] == 0.5)", 
+  ref = "Reference", bhm = "BHM", cp = "CP", psipp = "PSIPP"
+)
+wts_transformed_long <- wts_transformed_long %>% 
+  mutate(prior = factor(prior, 
+                        levels = c("Reference", "BHM", "CP", "LEAP", "NPP", 
+                                   "PP~(a[0] == 0.5)", "PSIPP")), 
+         model = factor(model, levels = c("PWE", "CurePWE")))
+# Plot
+wts_plt <- ggplot(wts_transformed_long, aes(x = prior, y = weight, fill = model)) +
+  geom_bar(stat = "identity", 
+           #position = "stack", 
+           position = position_dodge(width = 0.8)) +
+  facet_wrap(~ method, scales = "free_x") +
+  scale_fill_brewer(palette = "Set2", name = "Model") +
+  scale_x_discrete(
+    labels = function(x) {
+      # Parse LaTeX-like labels for display
+      sapply(x, function(label) if (label == "PP~(a[0] == 0.5)") parse(text = label) else label)
+    }
+  )+
+  labs(
+    title = "Comparison of Construct Weights across Weighting Methods",
+    x = "prior",
+    y = "weight"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "bottom",
+        legend.text=element_text(size=10),
+        legend.key.width= unit(2, 'cm'), 
+        legend.margin=margin(),
+        strip.text.x = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        #axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size = 14))
+
+wts_plt
+## analysis_weights_all, width: 1100, height: 600
+```
+
+
+## Predicted Difference in 2-Year Survival Probabilities from All Methods
+
+```{r}
+d.surv.diff.mtx      <- do.call(cbind, surv.diff.list)
+
+d.surv.diff.bma      <- sample.ensemble(wts = post.prob, samples.mtx = d.surv.diff.mtx)
+d.surv.diff.pbma     <- sample.ensemble(wts = pbma_wts, samples.mtx = d.surv.diff.mtx)
+d.surv.diff.pbma.BB  <- sample.ensemble(wts = pbma_BB_wts, samples.mtx = d.surv.diff.mtx)
+d.surv.diff.stacking <- sample.ensemble(wts = stacking_wts, samples.mtx = d.surv.diff.mtx)
+
+
+estim2 <- lapply(list(d.surv.diff.bma, d.surv.diff.pbma, d.surv.diff.pbma.BB, d.surv.diff.stacking), function(l){
+  round(c(mean = mean(l), sd = sd(l), quantile2(l, probs = c(0.5, 0.025, 0.975)),
+          prob_greater_0 = mean(l > 0)), 3)
+})
+estim2 <- do.call(rbind, estim2) %>%
+  as.data.frame()
+estim2 <- cbind(
+  model = rep("Ensemble", 4),
+  prior = c("BMA", "Pseudo-BMA", "Pseudo-BMA+", "Stacking"),
+  estim2
+) %>% as.data.frame()
+
+estim_all <- rbind(estim, estim2) %>% 
+  as.data.frame()
+```
+
+```{r}
+model_order <- c("Ensemble", paste0("PWE (J = ", 2:15, ")"), paste0("CurePWE (J = ", 2:15, ")"))
+
+estim_all <- estim_all %>%
+  mutate(model = factor(model, levels = model_order)) %>%
+  arrange(prior, model)
+
+estim_all
+```
+
+
+## Create Tables
+
+```{r}
+# construct credible interval as string
+textci <- function(lower, upper, digits = 3, mathmode = TRUE) {
+  lower.ch <- formatC(lower, digits = digits, format = 'f')
+  lower.ch[lower > 0] <- paste0('~', lower.ch[lower > 0])
+  upper.ch <- formatC(upper, digits = digits, format = 'f')
+  upper.ch[upper > 0] <- paste0('~', upper.ch[upper > 0])
+  ci <- paste0('(', lower.ch, ', ', upper.ch, ')')
+  if (mathmode)
+    ci <- paste0('$', ci, '$')
+  ci
+}
+```
+
+
+
+### Posterior Estimates from Ensemble Methods and Reference Prior
+
+```{r}
+ndigits <- 3
+
+estim.ref.ensem <- estim_all %>% 
+  filter(prior %in% c("ref", "BMA", "Pseudo-BMA", "Pseudo-BMA+", "Stacking")) %>% 
+  dplyr::select(-`q50`)
+
+## find the PWE model with the highest weight
+wts.tab.ref.ph <- wts.tab %>% 
+  filter(prior == "ref" & model %in% paste0("PWE (J = ", 2:15, ")"))
+
+## for each weighting method, find the PH model receiving the highest weight 
+idx.max <- sapply(3:6, function(j) which.max(wts.tab.ref.ph[, j]))
+idx.max # 2 4 9 4
+
+## find the CurePWE model with the highest weight
+wts.tab.ref.curePWE <- wts.tab %>% 
+  filter(model %in% paste0("CurePWE (J = ", 2:15, ")"))
+
+## for each weighting method, find the PH model receiving the highest weight 
+idx.max2 <- sapply(3:6, function(j) which.max(wts.tab.ref.curePWE[, j]))
+idx.max2 # 58 71 71 31
+
+
+t_ensem <- estim.ref.ensem %>% 
+  filter(model %in% c(unique(as.character(wts.tab.ref.ph$model[idx.max])),
+                      unique(as.character(wts.tab.ref.curePWE$model[idx.max2])),
+                      "Ensemble"))
+
+t_ensem <- t_ensem %>% 
+  mutate(model = factor(model, levels = c("PWE (J = 3)", "PWE (J = 5)", 
+                                          "CurePWE (J = 2)", "CurePWE (J = 3)", "CurePWE (J = 4)",
+                                          "Ensemble"))) %>% 
+  arrange(model, prior)
+t_ensem$prior <- ifelse(t_ensem$prior == "ref", "Reference", t_ensem$prior)
+
+t_ensem <- t_ensem %>%
+  mutate(CI = textci(`q2.5`, `q97.5`, digits = ndigits)) %>% 
+  dplyr::select(-c(`q2.5`, `q97.5`))
+# rearrange columns so that the last column is the BMA weight
+t_ensem <- t_ensem[, c('model', 'prior', 'mean', 'sd', 'CI', 'prob_greater_0')]
+ 
+tab_ensem <- t_ensem %>%
+  kable("latex",
+      col.names = c('Model', 'Prior', 'Mean', "SD", '$95\\%$ CI', 'P($\\Delta > 0$)'),
+      digits = ndigits, align = 'c',
+      booktabs=TRUE, escape = FALSE,
+      caption = 'Posterior Estimates of $\\Delta$ from Reference Prior and Ensemble Methods')
+```
+
+
+### Posterior Estimates with Model Weights
+
+#### BMA Weights
+
+```{r}
+ndigits <- 3
+
+t1 <- wts.tab_transformed %>% 
+  dplyr::select(model, prior, BMA)
+
+# for each prior, keep the row with the highest BMA weight across all PH models
+wts.bma.ph <- wts.tab %>% 
+  dplyr::select(model, prior, BMA) %>% 
+  filter(model != "AFT") %>%
+  group_by(prior) %>%
+  filter(BMA == max(BMA)) %>%
+  ungroup()
+
+estim.bma.ph <- estim_all %>% 
+  filter(! model %in% c("AFT", "Ensemble")) %>% 
+  dplyr::select(-`q50`)
+
+# Filter the rows in estim.bma.ph based on matching model and prior in wts.bma.ph
+estim.bma.ph <- estim.bma.ph %>%
+  inner_join(wts.bma.ph %>% 
+               dplyr::select(model, prior), by = c("model", "prior"))
+estim.bma.ph$model <- "PH"
+
+estim.bma <- rbind(
+  estim.bma.ph,
+  estim_all %>% 
+    filter(model == "AFT") %>% 
+    dplyr::select(-`q50`)
+)
+
+t1 <- estim.bma %>%
+  inner_join(t1, by = c("model", "prior")) %>% 
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+
+t1$prior <- recode(
+  t1$prior, leap = "LEAP", npp = "NPP", `pp_0.5` = "PP~$(a_0 = 0.5)$", ref = "Reference",
+  bhm = "BHM", commensurate = "CP", psipp = "PSIPP"
+)
+t1 <- t1 %>% 
+  mutate(prior = factor(prior, 
+                        levels = c("Reference", "BHM", "CP", "LEAP", "NPP", "PP~$(a_0 = 0.5)$", "PSIPP")), 
+         model = factor(model, levels = c("PH", "AFT"))) %>%
+  arrange(model, prior)
+t1$BMA <- formatC(t1$BMA, digits = ndigits, format = 'f')
+t1$BMA <- ifelse(t1$BMA == '0.000', '---', t1$BMA)
+
+t1_bma <- estim_all[estim_all$prior == 'BMA', ] %>% 
+  dplyr::select(-`q50`)
+t1_bma$BMA <- '---'
+t1         <- rbind(
+  t1,
+  t1_bma
+)
+
+t1 <- t1 %>%
+  mutate(CI = textci(`q2.5`, `q97.5`, digits = ndigits)) %>% 
+  dplyr::select(-c(`q2.5`, `q97.5`))
+# rearrange columns so that the last column is the BMA weight
+t1 <- t1[, c('model', 'prior', 'mean', 'sd', 'CI', 'prob_greater_0', 'BMA')]
+ 
+tab <- t1 %>%
+  kable("latex",
+      col.names = c('Model', 'Prior', 'Mean', "SD", '$95\\%$ CI', 'P($\\Delta > 0$)', 'Weight'),
+      digits = ndigits, align = 'c',
+      booktabs=TRUE, escape = FALSE,
+      caption = 'Posterior Estimates of $\\Delta$ with Construct Weights from BMA')
+```
+
+
+```{r, eval=FALSE}
+rownames(tab_wts) <- NULL
+
+estim_all <- rbind(estim, estim2) %>% as.data.frame()
+estim_all$prior <- recode(
+  estim_all$prior, leap = "LEAP", npp = "NPP", `pp_0.5` = "PP", ref = "Reference",
+  bhm = "BHM", commensurate = "CP",  psipp = "PSIPP"
+)
+estim_all$construct <- paste0("(", estim_all$model, ", ", estim_all$prior, ")")
+idx <- which(estim_all$model == "Ensemble")
+estim_all$construct[idx] <- paste0("Ensemble (", estim_all$prior[idx], " Weights", ")")
+
+rownames(estim_all) <- estim_all$construct
+estim_tab <- estim_all[c("(PH, Reference)", "(PH, BHM)", "(PH, CP)", "(PH, LEAP)", "(PH, NPP)", "(PH, PP)", "(PH, PSIPP)", "(AFT, Reference)", "(AFT, BHM)", "(AFT, CP)", "(AFT, LEAP)", "(AFT, NPP)", "(AFT, PP)", "(AFT, PSIPP)", "Ensemble (BMA Weights)", "Ensemble (Pseudo-BMA Weights)", "Ensemble (Pseudo-BMA+ Weights)", "Ensemble (Stacking Weights)"), c("model", "prior", "mean", "sd", "q2.5", "q97.5", "prob_greater_0")]
+rownames(estim_tab) <- NULL
+
+# construct credible interval as string
+textci <- function(lower, upper, digits = 3, mathmode = TRUE) {
+  lower.ch <- formatC(lower, digits = digits, format = 'f')
+  lower.ch[lower > 0] <- paste0('~', lower.ch[lower > 0])
+  upper.ch <- formatC(upper, digits = digits, format = 'f')
+  upper.ch[upper > 0] <- paste0('~', upper.ch[upper > 0])
+  ci <- paste0('(', lower.ch, ', ', upper.ch, ')')
+  if (mathmode)
+    ci <- paste0('$', ci, '$')
+  ci
+}
+
+ndigits <- 3
+estim_tab <- estim_tab %>%
+  mutate(CI = textci(`q2.5`, `q97.5`, digits = ndigits))
+
+estim_tab$weights_BMA <- c(formatC(tab_wts$BMA, digits = ndigits, format = 'f'), '---', '---', '---', '---')
+estim_tab$weights_pBMA <- c(formatC(tab_wts$`Pseudo-BMA`, digits = ndigits, format = 'f'), '---', '---', '---', '---')
+estim_tab$weights_pBMA_BB <- c(formatC(tab_wts$`Pseudo-BMA+`, digits = ndigits, format = 'f'), '---', '---', '---', '---')
+estim_tab$weights_stacking <- c(formatC(tab_wts$Stacking, digits = ndigits, format = 'f'), '---', '---', '---', '---')
+```
+
+
+```{r, eval=FALSE}
+## without Pseudo-BMA and Pseudo-BMA+ weights
+tab <- estim_tab %>%
+  filter(! prior %in% c("Pseudo-BMA", "Pseudo-BMA+")) %>%
+  dplyr::select(model, prior, mean, sd, CI, prob_greater_0, weights_BMA, weights_stacking) %>%
+  kable("latex",
+      col.names = c('Model', 'Prior', 'Mean', "SD", '$95\\%$ CI', 'P($\\Delta > 0$)', 'BMA Weight', 'Stacking Weight'),
+      digits = ndigits, align = 'c',
+      booktabs=TRUE, escape = FALSE,
+      caption = 'Posterior Estimates of $\\Delta$ with Model Weights from BMA and Stacking')
+```
+
+
+## Posterior Density Plot of Predicted Difference in 2-Year Survival Probabilities
+
+1. Posterior densities from PP with $a_0 = 0.5$, NPP, and BMA are quite similar to each other.
+
+```{r}
+surv_diff_df           <- cbind(d.surv.diff.mtx, d.surv.diff.bma, d.surv.diff.pbma, d.surv.diff.pbma.BB, d.surv.diff.stacking)
+colnames(surv_diff_df) <- c(paste0(estim$model, "_", estim$prior), "Ensemble_bma", "Ensemble_pbma", "Ensemble_pbma+", "Ensemble_stacking")
+#colnames(surv_diff_df) <- recode(colnames(surv_diff_df),
+#                                 ref = "Reference",
+#                                 leap = "LEAP",
+#                                 npp = "NPP",
+#                                 `pp_0.5` = "PP",
+#                                 bhm = "BHM",
+#                                 commensurate = "Commensurate")
+
+surv_diff_df           <- as.data.frame(surv_diff_df)
+# transform surv_diff_df to long format
+surv_diff_long <- surv_diff_df %>%
+  pivot_longer(
+    cols = everything(),        # Include all columns
+    names_to = "full_name",     # Temporary name for original column names
+    values_to = "value"         # Values of the columns
+  ) %>%
+  # Extract 'method' and 'prior' based on patterns in column names
+  mutate(
+    method = case_when(
+      grepl("^PH_", full_name) ~ "PH",
+      grepl("^AFT_", full_name) ~ "AFT",
+      grepl("^Ensemble_", full_name) ~ "Ensemble"
+    ),
+    prior = case_when(
+      grepl("ref", full_name) ~ "Reference",
+      grepl("pp_0.5", full_name) ~ "PP",
+      grepl("bhm", full_name) ~ "BHM",
+      grepl("leap", full_name) ~ "LEAP",
+      grepl("npp", full_name) ~ "NPP",
+      grepl("psipp", full_name) ~ "PSIPP",
+      grepl("commensurate", full_name) ~ "CP",
+      grepl("pbma\\+", full_name) ~ "Pseudo-BMA+",
+      grepl("pbma", full_name) ~ "Pseudo-BMA",
+      grepl("bma", full_name) ~ "BMA",
+      grepl("stacking", full_name) ~ "Stacking"
+    )
+  ) %>%
+  select(-full_name) # Remove temporary column
+
+# Check the resulting data
+head(surv_diff_long)
+
+surv_diff_long$prior <- factor(surv_diff_long$prior,
+                                  levels = c("Reference", "BHM", "CP", "LEAP", "NPP", "PP", "PSIPP", 
+                                             "BMA", 
+                                             "Pseudo-BMA",
+                                             "Pseudo-BMA+", 
+                                             "Stacking"),
+                                  ordered = T)
+```
+
+```{r}
+plot_density_by_method_prior <- function(data, 
+                                         x = "value", 
+                                         linetype_var = "method", 
+                                         color_var = "prior") {
+  cbPalette <- c("#999999", "#CC79A7", "#F0E442", "#E69F00", 
+                 "#0072B2", "#009E73", "#6A3D9A", "#56B4E9", "#D55E00")
+  
+   # Define linetype mapping: PH and Ensemble -> solid; AFT -> dashed
+  linetype_map <- c("PH" = "solid", "Ensemble" = "solid", "AFT" = "dashed")
+  
+  ggplot(data, aes_string(x = x, linetype = linetype_var, color = color_var)) +
+    geom_density(size = 1) +
+    scale_color_manual(values = cbPalette) +         # Color-blind friendly palette
+    scale_linetype_manual(values = linetype_map) +   # Custom linetype mapping
+    labs(title = "Posterior Density of Estimated Difference in Two-Year RFS Probabilities",
+         x = "Difference in two-year RFS probabilities", 
+         y = "Density",
+         color = "Prior", 
+         linetype = "Method") +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 10),
+      legend.key.width = unit(2, 'cm'),
+      legend.margin = margin(),
+      plot.title = element_text(hjust = 0.5, size = 14)
+    )
+}
+```
+
+```{r}
+plot_density_by_method_prior(surv_diff_long %>% filter(!prior %in% c("Pseudo-BMA", "Pseudo-BMA+")))
+```
+
+
+
+```{r}
+cbPalette <- c("#999999", "#CC79A7", "#F0E442", "#E69F00", "#0072B2", "#009E73", "#56B4E9", "#D55E00")
+
+surv_diff_df_long %>%
+  filter(! method %in% c("Ensemble (Pseudo-BMA Weights)", "Ensemble (Pseudo-BMA + BB Weights)")) %>%
+  ggplot(aes(x=estimate, color = method)) +
+  geom_density() +
+  scale_colour_manual(values= cbPalette) +
+  labs(title = "Posterior Density of Estimated Difference in Two-Year RFS Probabilities",
+       color = "Method")
+
+surv_diff_df_long %>%
+  filter( method %in% c("Ensemble (BMA Weights)", "Ensemble (Pseudo-BMA Weights)", "Ensemble (Pseudo-BMA + BB Weights)", "Ensemble (Stacking Weights)")) %>%
+  ggplot(aes(x=estimate, color = method)) +
+  geom_density() +
+  scale_colour_manual(values=  c("#999999", "#CC79A7", "#0072B2", "#E69F00")) +
+  labs(title = "Posterior Density of Estimated Difference in Two-Year RFS Probabilities",
+       color = "Method") +
+  theme_bw()
+```
+
+
+```{r}
+cbPalette <- c("#999999", "#CC79A7", "#009E73", "#E69F00","#56B4E9", "#D55E00")
+
+surv_diff_df_long %>%
+  filter(! method %in% c("Ensemble (Pseudo-BMA Weights)", "Ensemble (Pseudo-BMA + BB Weights)"
+                         , "NPP", "PP")) %>%
+  ggplot(aes(x=estimate, color = method)) +
+  geom_density() +
+  scale_colour_manual(values= cbPalette) +
+  labs(title = "Posterior Density of Estimated Difference in Two-Year RFS Probabilities",
+       color = "Method") +
+  theme_bw() +
+      theme(legend.position = "bottom",
+            legend.box = "vertical",
+            legend.text=element_text(size=10),
+            legend.key.width= unit(2, 'cm'), 
+            legend.margin=margin(),
+            strip.text.x = element_text(size = 10),
+            strip.text.y = element_text(size = 10),
+            plot.title = element_text(hjust = 0.5, size = 14))
+#width:690, height:450
+```
+
+
+
+### Posterior Density Plot for PSIPP per Stratum
+
+```{r}
+#' function to predict survival probability at t years for treated and untreated groups for each stratum under PSIPP
+#' 
+get.surv.prob.psipp.stratum <- function(
+    t, 
+    post.samples,
+    breaks
+){
+  J          = length(breaks) + 1
+  stan.data  = attr(post.samples, 'data')
+  p          = stan.data$p
+  K          = stan.data$K
+  X          = stan.data$X
+  beta       = suppressWarnings(
+    as.matrix( post.samples[, paste0( "treatment", '_stratum_', 1:K ), drop=F] )
+  )
+  
+  log_hazard = suppressWarnings(
+    as.matrix( post.samples[, paste0( colnames(X)[-which(colnames(X) == "treatment")], '_stratum_', rep(1:K, each = p-1) ), drop=F] )
+  )
+  interval_names = colnames(X)[-which(colnames(X) == "treatment")]
+  
+  ## interval index for which the time t belongs to
+  interval.id = findInterval(t, c(0, breaks, Inf), left.open = TRUE)
+  if( t == 0 ){
+    interval.id = 1
+  }
+  
+  breaks.new              = (c(breaks, Inf))[1:interval.id]
+  breaks.new[interval.id] = t
+  interval.length         = breaks.new - c(0, breaks.new[-interval.id])
+  
+  ## compute cumulative baseline hazard at t years for each stratum
+  H = sapply(1:K, function(k){
+    log_hazard_stratum = log_hazard[, paste0(interval_names, '_stratum_', k)]
+    log_hazard_stratum = log_hazard_stratum[, 1] + cbind(0, log_hazard_stratum[, 2:J])
+    hazard_stratum     = exp(log_hazard_stratum) ## baseline hazards
+    
+    H_stratum          = hazard_stratum[, 1:interval.id, drop = F] %r*% interval.length 
+    if( interval.id != 1 ){
+      H_stratum        = t( apply(H_stratum, 1, cumsum) ) ## cumulative baseline hazard
+    }
+    H_stratum        = H_stratum[, interval.id]
+    return( H_stratum)
+  })
+  
+  ## predicted t-year survival probability for untreated for each stratum
+  S.ctl = lapply(1:K, function(k){
+    H_stratum     = H[, k]
+    S_ctl_stratum = exp( -H_stratum )
+    return(S_ctl_stratum)
+  }
+  )
+  S.ctl = do.call(cbind, S.ctl)
+
+  ## predicted t-year survival probability for untreated for each stratum
+  S.trt = lapply(1:K, function(k){
+    H_stratum     = H[, k]
+    beta_stratum  = beta[, paste0( 'treatment_stratum_', k)]
+    S_trt_stratum = exp( -H_stratum * exp(beta_stratum) )
+    return(S_trt_stratum)
+  }
+  )
+  S.trt = do.call(cbind, S.trt)
+  
+  return(
+    list(
+      surv.trt.stratum = S.trt,
+      surv.ctl.stratum = S.ctl
+    )
+  )
+}
+
+#' function to estimate the treatment effect (difference in 2-year survival probability between treated and untreated) for each stratum,
+#' i.e., P(T > 2 | A = 1) - P(T > 2 | A = 0), for PSIPP
+get.surv.diff.2yr.psipp.stratum <- function(
+    post.samples,
+    breaks
+) {
+  surv.list = get.surv.prob.psipp.stratum(
+    t = 2,
+    post.samples = post.samples,
+    breaks = breaks
+  )
+  surv.diff  = surv.list$surv.trt.stratum - surv.list$surv.ctl.stratum
+  return(surv.diff)
+}
+```
+
+
+```{r}
+res.psipp <- readRDS(file.path(results.dir, "PWE_id_60_psipp_nintervals_5.rds"))
+
+d.surv.diff.psipp.stratum <- get.surv.diff.2yr.psipp.stratum(
+  post.samples = res.psipp$draws,
+  breaks = breaks
+)
+colnames(d.surv.diff.psipp.stratum) <- paste0("Stratum ", 1:ncol(d.surv.diff.psipp.stratum))
+
+surv_diff_df_psipp      <- as.data.frame(d.surv.diff.psipp.stratum)
+surv_diff_df_psipp_long <- surv_diff_df_psipp %>%
+  pivot_longer(
+    cols = all_of(colnames(surv_diff_df_psipp)),
+    names_to = "strata",
+    values_to = "estimate"
+  )
+surv_diff_df_psipp_long$strata <- factor(surv_diff_df_psipp_long$strata,
+                                         levels = paste0("Stratum ", 1:ncol(d.surv.diff.psipp.stratum)),
+                                         ordered = T)
+
+ggplot(surv_diff_df_psipp_long, aes(x=estimate, col = strata, linetype = strata)) +
+  geom_density() +
+  scale_colour_manual(values= c("#999999", "#56B4E9", "#CC79A7", "orange")) +
+  labs(title = "Posterior Density of Predicted Difference in 2-Year Survival Probabilities",
+       subtitle = "for Each Stratum under PSIPP")
+```
+
+
+## Predicted Survival Probabilities
+
+```{r}
+surv.prob.ctl.long <- lapply(1:length(priors), function(i){
+  df = cbind(prob = surv.prob.ctl[[i]], trt = 0, time = time.list) %>% as.data.frame()
+  df$priors = priors[[i]]
+  return(df)
+})
+surv.prob.ctl.long <- do.call(rbind, surv.prob.ctl.long)
+
+surv.prob.trt.long <- lapply(1:length(priors), function(i){
+  df = cbind(prob = surv.prob.trt[[i]], trt = 1, time = time.list) %>% as.data.frame()
+  df$priors = priors[[i]]
+  return(df)
+})
+surv.prob.trt.long <- do.call(rbind, surv.prob.trt.long)
+
+surv.prob     <- rbind(surv.prob.ctl.long, surv.prob.trt.long) %>% as.data.frame()
+surv.prob$trt <- as.factor(surv.prob$trt)
+
+surv.prob %>%
+  ggplot(aes(x = time, y = prob, color = trt)) +
+  geom_line() +
+  #geom_point() +
+  labs(x = 'time') +
+  facet_wrap(~priors) +
+  labs(title = "Predicted Survival Probabilities") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+### Predicted Survival Probabilities for PSIPP per Stratum
+
+```{r}
+surv.prob.stratum <- lapply(time.list, function(x){
+  res.surv = get.surv.prob.psipp.stratum(
+    t = x,
+    post.samples = res.psipp$draws,
+    breaks = breaks
+  )
+  df = rbind(colMeans(res.surv$surv.trt.stratum),
+              colMeans(res.surv$surv.ctl.stratum)) %>%
+    as.data.frame()
+  colnames(df) = paste0("Stratum ", 1:ncol(df))
+  df$trt  = c(1, 0)
+  df$time = x
+  return(df)
+})
+surv.prob.stratum      <- do.call(rbind, surv.prob.stratum)
+surv.prob.stratum.long <- surv.prob.stratum %>%
+  pivot_longer(
+    cols = all_of(paste0("Stratum ", 1:(ncol(surv.prob.stratum)-2))),
+    names_to = "strata",
+    values_to = "prob"
+  )
+surv.prob.stratum.long$trt <- as.factor(surv.prob.stratum.long$trt)
+
+surv.prob.stratum.long %>%
+  ggplot(aes(x = time, y = prob, linetype = trt)) +
+  geom_line() +
+  #geom_point() +
+  labs(x = 'time') +
+  facet_wrap(~strata) +
+  labs(title = "Predicted Survival Probabilities for Each Stratum under PSIPP", linetype = "Treatment") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+res.strata <- res.psipp$res.strata
+res.strata.curr <- cbind(res.strata$data.list$curr, stratum = res.strata$strata.list$curr)
+
+res.strata.curr %>%
+  group_by(stratum) %>%
+  summarise(mean_sex = mean(sex), mean_age = mean(age), mean_node_bin = mean(node_bin))
+```
+

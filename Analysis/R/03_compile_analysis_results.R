@@ -23,7 +23,6 @@ for (i in 1:length(file.list)) {
   
   d     <- res.i$draws
   prior <- scen.i$priors
-  model <- scen.i$models
   
   if ( model == "PWE"){
     if ( prior == "psipp" ){
@@ -55,7 +54,7 @@ for (i in 1:length(file.list)) {
   estim.i <- round(c(mean = mean(d.surv.diff), sd = sd(d.surv.diff),
                      quantile2(d.surv.diff, probs = c(0.5, 0.025, 0.975))), 3)
   prior.i <- prior
-  model.i <- paste0(model, " (J = ", scen.i$J, ")")
+  model.i <- paste0(scen.i$models, " (J = ", scen.i$J, ")")
   
   if( i == 1 ){
     estim  <- estim.i
