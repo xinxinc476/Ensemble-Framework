@@ -6,7 +6,7 @@ sample.ensemble = function(wts, samples.mtx){
   ## draw n i.i.d. samples (c0) from categorical distribution with probability being `wts`
   c0 <- sample(x = seq_len(ncol(samples.mtx)), size = nrow(samples.mtx), replace = T,
                prob = wts)
-  
+
   models <- unique(c0)
   res.samples <- lapply(models, function(j){
     nsample = sum(c0 == j)

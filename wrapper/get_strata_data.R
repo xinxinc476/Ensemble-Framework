@@ -1,4 +1,5 @@
-library(psrwe) # psrwe package is available on GitHub
+#devtools::install_github("olssol/psrwe")
+library(psrwe)
 
 #' Estimate propensity scores (PS), assign subjects into different strata based on PS, and obtain stratum-specific power
 #' prior parameter values (a0s) using psrwe package
