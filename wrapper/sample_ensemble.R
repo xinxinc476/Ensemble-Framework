@@ -2,15 +2,16 @@
 #' from individual priors and (posterior) weights
 #'
 sample.ensemble = function(wts, samples.mtx){
-  wts <- as.numeric(wts)
+  n                    <- nrow(samples.mtx)
+  samples.mtx.permuted <- samples.mtx[sample(x = seq_len(n), size = n, replace = F), ]
+  wts                  <- as.numeric(wts)
+  
   ## draw n i.i.d. samples (c0) from categorical distribution with probability being `wts`
-  c0 <- sample(x = seq_len(ncol(samples.mtx)), size = nrow(samples.mtx), replace = T,
-               prob = wts)
-
-  models <- unique(c0)
+  c0          <- sample(x = seq_len(ncol(samples.mtx)), size = n, replace = T, prob = wts)
+  models      <- unique(c0)
   res.samples <- lapply(models, function(j){
     nsample = sum(c0 == j)
-    return( sample(samples.mtx[, j], size = nsample, replace = T) )
+    return( samples.mtx.permuted[1:nsample, j] )
   })
   res.samples <- unlist(res.samples)
   return(res.samples)
