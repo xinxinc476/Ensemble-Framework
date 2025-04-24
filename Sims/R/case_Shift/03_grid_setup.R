@@ -1,6 +1,5 @@
 ## Set up simulation scenarios
 library(dplyr)
-library(hdbayes)
 
 ## Directory to save simulation scenarios
 save.dir <- 'Sims/R/case_Shift'
