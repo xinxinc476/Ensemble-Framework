@@ -6,8 +6,6 @@ library(scoringutils)
 sim.dir   <- "/work/users/x/i/xinxinc/super_prior/Sims/case_Unexch"
 
 file.list <- list.files(path = sim.dir, pattern = '.rds')
-id.list   <- sapply(file.list, function(f){strsplit(f, '_')[[1]][2]})
-
 save.dir  <- "Sims/Results"
 
 ## specify true value of treatment effect (difference in RFS probability at 2 years for treated v.s. untreated)
@@ -33,7 +31,8 @@ for(i in seq_len(length(file.list))){
       diff = mean - param_true,
       diff_sq = diff^2,
       ci.ind  = ifelse(param_true >= `q2.5` & param_true <= `q97.5`, 1, 0),
-      log_var = ifelse(sd > 0, log(sd^2), NA)
+      log_var = ifelse(sd > 0, log(sd^2), NA),
+      ci.width = `q97.5` - `q2.5`
     )
 
   ## add simulation scenario
@@ -91,6 +90,7 @@ res_avg_trt <- lst.combined$simres.trt %>%
     ,   log_mse = log(mean(diff_sq))
     ,    ci.cov = mean(ci.ind)
     , avg_interval_score = mean(interval_score)
+    ,       avg_ci_width = mean(ci.width)
   )
 res <- list(
   res_avg_wts = res_avg_wts,

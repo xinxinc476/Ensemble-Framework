@@ -22,7 +22,7 @@ For all cases, the current data sets were generated in the same way: we simulate
 
 1. Exchangeable case: Similar to obtaining the current data, we generated $X_0$ based on bootstrap samples from the E1690 data and $t_0$ from the Weibull AFT model corresponding to $S(\cdot \mid \hat{\theta}, X_0)$.
     
-2. Parameter shift case: We generated $X_0$ as in the PP case but $t_0$ from a Weibull AFT model corresponding to $S(\cdot \mid \tilde{\theta}, X_0)$, for which each element of $\tilde{\theta}$ was sampled independently from a normal distribution with mean being the corresponding element of $\hat{\theta}$ and standard deviation 0.2. For the scale parameter, the mean was taken to be the logarithm of the corresponding element in $\hat{\theta}$.
+2. Parameter shift case: We generated $X_0$ as in the exchangeable case but $t_0$ from a Weibull AFT model corresponding to $S(\cdot \mid \tilde{\theta}, X_0)$, for which each element of $\tilde{\theta}$ was sampled independently from a normal distribution with mean being the corresponding element of $\hat{\theta}$ and standard deviation 0.2. For the scale parameter, the mean was taken to be the logarithm of the corresponding element in $\hat{\theta}$.
 
 3. Unexchangeable case: For the historical data, $X_0$ and $t_0$ were generated based on bootstrap samples from the E1684 data and the Weibull AFT model according to $S(\cdot \mid \theta_{*}, X_0)$, respectively, where $\theta_{*} = 2 \hat{\theta}_0$.
 
@@ -83,17 +83,18 @@ res_avg_wts_long$method <- factor(
 ## convert res_avg_trt to long format
 res_avg_trt_long <- res_avg_trt %>%
   pivot_longer(
-    cols = all_of(c("avg_log_var", "bias", "log_mse", "ci.cov", "avg_interval_score")),
+    cols = all_of(c("avg_log_var", "bias", "log_mse", "ci.cov", "avg_ci_width")),
     names_to = "metrics",
     values_to = "measurement"
   )
 res_avg_trt_long$metrics <- recode(
   res_avg_trt_long$metrics, `log_mse` = "Log(MSE)", `bias` = "Bias", 
   `avg_log_var` = "Avg Log(Var)", `ci.cov` = "Coverage Prob", 
-  `avg_interval_score` = "Avg Interval Score"
+  `avg_ci_width` = "Avg CI Width"
 )
 res_avg_trt_long$metrics <- factor(
-  res_avg_trt_long$metrics, levels = c("Bias", "Log(MSE)", "Avg Log(Var)", "Avg Interval Score", "Coverage Prob"), ordered = T
+  res_avg_trt_long$metrics, levels = c("Bias", "Log(MSE)", "Avg Log(Var)", "Coverage Prob", "Avg CI Width"), 
+  ordered = T
 )
 res_avg_trt_long$method <- recode(
   res_avg_trt_long$method,
@@ -111,7 +112,7 @@ res_avg_trt_long$method <- factor(
 ```
 
 
-# Plots of Average Construct Weights
+# Plot of Average Model Weights
 
 ## censoring proportion = 0.4
 
@@ -138,7 +139,7 @@ res_avg_wts_long %>%
             strip.text.x = element_text(size = 10),
             strip.text.y = element_text(size = 10),
             plot.title = element_text(hjust = 0.5, size = 14))
-## sims_aft_weights, width: 1025, height: 600
+## sims_aft_weights
 ```
 
 ## censoring proportion = 0.2
@@ -196,11 +197,11 @@ res_avg_wts_long %>%
             strip.text.y = element_text(size = 10),
             plot.title = element_text(hjust = 0.5, size = 14))
 
-## supp_sims_aft_weights_0.6, width: 1025, height: 600
+## supp_sims_aft_weights_0.6
 ```
 
 
-# Plots of Metrics on Estimated Treatment Effect
+# Plot of Metrics on Estimated Treatment Effect
 
 ## censoring proportion = 0.4
 
@@ -221,6 +222,13 @@ plt <- res_avg_trt_long %>%
     data = res_avg_trt_long %>%
       filter(metrics == "Coverage Prob"),
     aes(yintercept = 0.95),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_hline(
+    data = res_avg_trt_long %>%
+      filter(metrics == "Bias"),
+    aes(yintercept = 0),
     linetype = "dashed",
     color = "black"
   ) +
@@ -284,15 +292,38 @@ plt <- res_avg_trt_long %>%
     panel.spacing = unit(1, "lines")
   )
 plt
-## sims_aft_metrics, width: 1100, height: 950
+## sims_aft_metrics
+```
+
+
+```{r}
+color_palette <- c(color_palette1, color_palette2)
+res_avg_trt_long %>%
+    filter(`cens.prop` == 0.4) %>% 
+    filter(! method %in% c("Ensemble~(Pseudo-BMA~Weights)", "Ensemble~(Pseudo-BMA+~Weights)")) %>% 
+    ggplot(aes(x = nevents, y = measurement, color = method)) +
+      geom_line() +
+      geom_point() +
+      scale_colour_manual(values=color_palette, labels = function(x) parse(text = x)) +
+      labs(color = "Method",
+           title = TeX("Metrics on Estimated Difference in Two-Year RFS Probabilities ($\\delta = 0.4$)")) +
+      guides(color = guide_legend(nrow = 3, byrow = TRUE)) +
+      facet_grid(metrics~case, scales = "free_y") +
+      theme_bw() +
+      theme(legend.position = "bottom",
+            legend.text=element_text(size=10),
+            legend.key.width= unit(2, 'cm'), 
+            legend.margin=margin(),
+            strip.text.x = element_text(size = 10),
+            strip.text.y = element_text(size = 10),
+            plot.title = element_text(hjust = 0.5, size = 14))
 ```
 
 
 ## censoring proportion = 0.2
 
 ```{r}
-# Modify the data and plot
-plt <- res_avg_trt_long %>%
+res_avg_trt_long %>%
   filter(`cens.prop` == 0.2) %>%
   mutate(
     method_group = ifelse(grepl("Ensemble~", method), "Ensemble", "Individual"),
@@ -304,6 +335,13 @@ plt <- res_avg_trt_long %>%
     data = res_avg_trt_long %>%
       filter(metrics == "Coverage Prob"),
     aes(yintercept = 0.95),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_hline(
+    data = res_avg_trt_long %>%
+      filter(metrics == "Bias"),
+    aes(yintercept = 0),
     linetype = "dashed",
     color = "black"
   ) +
@@ -366,16 +404,14 @@ plt <- res_avg_trt_long %>%
     plot.title = element_text(hjust = 0.5, size = 14),
     panel.spacing = unit(1, "lines")
   )
-plt
-## supp_sims_aft_metrics_0.2, width: 1100, height: 950
+## supp_sims_aft_metrics_0.2
 ```
 
 
 ## censoring proportion = 0.6
 
 ```{r}
-# Modify the data and plot
-plt <- res_avg_trt_long %>%
+res_avg_trt_long %>%
   filter(`cens.prop` == 0.6) %>%
   mutate(
     method_group = ifelse(grepl("Ensemble~", method), "Ensemble", "Individual"),
@@ -387,6 +423,13 @@ plt <- res_avg_trt_long %>%
     data = res_avg_trt_long %>%
       filter(metrics == "Coverage Prob"),
     aes(yintercept = 0.95),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_hline(
+    data = res_avg_trt_long %>%
+      filter(metrics == "Bias"),
+    aes(yintercept = 0),
     linetype = "dashed",
     color = "black"
   ) +
@@ -449,6 +492,5 @@ plt <- res_avg_trt_long %>%
     plot.title = element_text(hjust = 0.5, size = 14),
     panel.spacing = unit(1, "lines")
   )
-plt
-## supp_sims_aft_metrics_0.6, width: 1100, height: 950
+## supp_sims_aft_metrics_0.6
 ```
