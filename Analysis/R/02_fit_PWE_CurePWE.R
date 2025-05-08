@@ -1,6 +1,5 @@
 ## Analyze E1690 (current) and E1684 (historical) data sets using a piecewise exponential (PWE) model 
-## and a standard cure rate (CurePWE) model with varying number of time intervals/breaks in the PWE 
-## model and various priors
+## and a mixture cure rate (CurePWE) model with varying number of time intervals/breaks in the PWE component 
 library(hdbayes)
 library(dplyr)
 library(survival)
@@ -23,12 +22,14 @@ if ( is.na(id) )
 save.dir <- 'Analysis/Results'
 
 scen     <- grid[id, ]
-prior.id <- scen$priors
-model.id <- scen$models
+prior.id <- scen$prior
+model.id <- scen$model
 J.id     <- scen$J
+arm.id   <- scen$arm
 ## Obtain file name based on id
-filename <- file.path(save.dir, 
-                      paste0('id_', id, "_", model.id, "_", prior.id, '_nintervals_', J.id, '.rds'))
+filename <- file.path(save.dir,
+                      paste0('id_', id, '_', model.id, "_", prior.id, "_arm_", arm.id,
+                             '_nintervals_', J.id, '.rds'))
 
 ## load data
 hist <- E1684
@@ -43,11 +44,15 @@ age_stats <- with(curr,
                   c('mean' = mean(age), 'sd' = sd(age)))
 hist$cage <- ( hist$age - age_stats['mean'] ) / age_stats['sd']
 curr$cage <- ( curr$age - age_stats['mean'] ) / age_stats['sd']
+
+## stratify by treatment arm
+curr <- curr %>% filter(treatment == arm.id)
+hist <- hist %>% filter(treatment == arm.id)
 data.list <- list(curr, hist)
 
 ## formula for current and historical data
-fmla       <- survival::Surv(failtime, failcens) ~ treatment + sex + cage + node_bin
-fmla.psipp <- survival::Surv(failtime, failcens) ~ treatment
+fmla       <- survival::Surv(failtime, failcens) ~ sex + cage + node_bin
+fmla.psipp <- survival::Surv(failtime, failcens) ~ 1
 
 ## obtain cut points for intervals
 nbreaks <- J.id
