@@ -4,9 +4,8 @@
 .Ruserdata
 Analysis/Results
 .DS_Store
-Stan/glm_pp
-Stan/glm_stratified_pp
 *.Rproj
 *.rds
-/Sims_enar
 /Archive
+*.html
+Sims/Report/report.nb.html
