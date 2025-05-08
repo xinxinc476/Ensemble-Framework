@@ -157,103 +157,30 @@ for ( j in seq_len(ndatasets) ) {
     iter_sampling = nsamples,
     chains = nchains
   )$logml
-  while( is.na(res.logml.bhm) ){
-    print(paste("Error: is.na(res.logml.bhm) is", is.na(res.logml.bhm)))
-    d.bhm        <- aft.bhm(
-      fmla, data.list
-      , dist = "weibull"
-      , meta.mean.mean = NULL
-      , meta.mean.sd = NULL
-      , meta.sd.mean = 0
-      , meta.sd.sd = 0.5
-      , scale.mean = NULL, scale.sd = NULL
-      , get.loglik = T,
-      iter_warmup = nburnin + 2000,
-      iter_sampling = nsamples + 2000,
-      chains = nchains
-    )
-    res.logml.bhm <- aft.logml.map(
-      post.samples = d.bhm,
-      iter_warmup = nburnin + 2000,
-      iter_sampling = nsamples + 2000,
-      chains = nchains
-    )$logml
-  }
   d.list[["bhm"]] <- d.bhm
   rm(d.bhm)
 
   ## LEAP:
-  # Initialize retry parameters
-  max_retries <- 3
-  attempt <- 1
-  success <- FALSE
-
-  while (attempt <= max_retries && !success) {
-    tryCatch(
-      {
-        message("Attempt ", attempt, ": Running aft.leap...")
-        d.leap           <- aft.leap(
-          fmla, data.list
-          , dist = "weibull"
-          , K = 2
-          , prob.conc = NULL
-          , beta.mean = NULL, beta.sd = NULL
-          , scale.mean = NULL, scale.sd = NULL
-          , gamma.lower = 0
-          , gamma.upper = 1
-          , get.loglik = T,
-          iter_warmup = nburnin,
-          iter_sampling = nsamples,
-          chains = nchains
-        )
-        message("Attempt ", attempt, ": Running aft.logml.leap...")
-        res.logml.leap   <- aft.logml.leap(
-          post.samples = d.leap,
-          iter_warmup = nburnin,
-          iter_sampling = nsamples,
-          chains = nchains
-        )$logml
-
-        # If no error occurs, mark as successful
-        success <- TRUE
-        message("Execution succeeded on attempt ", attempt, ".")
-      },
-      error = function(e) {
-        # Catch errors and log them
-        message("Error occurred on attempt ", attempt, ": ", e$message)
-        attempt <- attempt + 1
-        if (attempt > max_retries) {
-          stop("All attempts failed. Error: ", e$message)
-        } else {
-          message("Retrying...")
-        }
-      }
-    )
-  }
-
-  while( is.na(res.logml.leap) ) {
-    print(paste("Error: is.na(res.logml.leap) is", is.na(res.logml.leap)))
-    d.leap           <- aft.leap(
-      fmla, data.list
-      , dist = "weibull"
-      , K = 2
-      , prob.conc = NULL
-      , beta.mean = NULL, beta.sd = NULL
-      , scale.mean = NULL, scale.sd = NULL
-      , gamma.lower = 0
-      , gamma.upper = 1
-      , get.loglik = T,
-      iter_warmup = nburnin + 2000,
-      iter_sampling = nsamples + 2000,
-      chains = nchains
-    )
-    res.logml.leap   <- aft.logml.leap(
-      post.samples = d.leap,
-      iter_warmup = nburnin + 2000,
-      iter_sampling = nsamples + 2000,
-      chains = nchains
-    )$logml
-  }
+  d.leap           <- aft.leap(
+    fmla, data.list
+    , dist = "weibull"
+    , K = 2
+    , prob.conc = NULL
+    , beta.mean = NULL, beta.sd = NULL
+    , scale.mean = NULL, scale.sd = NULL
+    , gamma.lower = 0
+    , gamma.upper = 1
+    , get.loglik = T,
+    iter_warmup = nburnin,
+    iter_sampling = nsamples,
+    chains = nchains
+  )
+  res.logml.leap   <- aft.logml.leap(
+    post.samples = d.leap,
+    iter_warmup = nburnin,
+    iter_sampling = nsamples,
+    chains = nchains
+  )$logml
   d.list[["leap"]] <- d.leap
   rm(d.leap)
 
@@ -316,7 +243,7 @@ for ( j in seq_len(ndatasets) ) {
     l$pointwise[,"elpd_loo"]
   })
   wts.estim.j$pbma_wts     <- pseudobma_weights(lpd_point, BB = FALSE)
-  wts.estim.j$pbma_BB_wts  <- pseudobma_weights(lpd_point, BB = TRUE) # default is BB=TRUE
+  wts.estim.j$pbma_BB_wts  <- pseudobma_weights(lpd_point, BB = TRUE)
   wts.estim.j$stacking_wts <- stacking_weights(lpd_point)
   rm(loo.list, lpd_point)
 
@@ -377,21 +304,7 @@ for ( j in seq_len(ndatasets) ) {
     simres.trt <- rbind(simres.trt, trt.estim.j)
     simres.wts <- rbind(simres.wts, wts.estim.j)
   }
-
-  lst <- list(
-    'id'      = id
-    , 'scen'  = grid.id
-    , 'start' = grid.id$start
-    , 'end' = grid.id$start + j - 1
-    , 'simres.trt'  = simres.trt
-    , 'simres.wts'  = simres.wts
-  )
-  temp.dir <- "Sims_supp/Results/in_progress"
-  temp.filename <- file.path(temp.dir, paste0('id_', id, '_', 'nevents_', nevents.id,
-                                              '_censorProp_', cens.prop.id,
-                                              '_case_', case.id,
-                                              '_rep_', grid.id$start, '-', grid.id$end, '.rds'))
-  saveRDS(lst, temp.filename)
+  
   print(paste0("#################### Completed iteration ", j, " ######################"))
 
 }

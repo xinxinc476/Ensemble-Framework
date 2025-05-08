@@ -1,0 +1,241 @@
+---
+title: "report_Sims"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(latex2exp)
+```
+
+
+Here, we present the simulation study in the Supplement. The setup is identical to the simulation study in the main text with an additional scenario: $n_{\text{event}} = 600$.
+
+For all cases, the current data sets were generated in the same way: we simulated $X$ based on bootstrap samples from the E1690 data and $t$ from the Weibull AFT model corresponding to $S(\cdot \mid \hat{\theta}, X)$. The generating process of the historical data set differs by cases as follows.
+
+1. Exchangeable case: Similar to obtaining the current data, we generated $X_0$ based on bootstrap samples from the E1690 data and $t_0$ from the Weibull AFT model corresponding to $S(\cdot \mid \hat{\theta}, X_0)$.
+    
+2. Parameter shift case: We generated $X_0$ as in the exchangeable case but $t_0$ from a Weibull AFT model corresponding to $S(\cdot \mid \tilde{\theta}, X_0)$, for which each element of $\tilde{\theta}$ was sampled independently from a normal distribution with mean being the corresponding element of $\hat{\theta}$ and standard deviation 0.2. For the scale parameter, the mean was taken to be the logarithm of the corresponding element in $\hat{\theta}$.
+
+3. Unexchangeable case: For the historical data, $X_0$ and $t_0$ were generated based on bootstrap samples from the E1684 data and the Weibull AFT model according to $S(\cdot \mid \theta_{*}, X_0)$, respectively, where $\theta_{*} = 2 \hat{\theta}_0$.
+
+```{r}
+## load compiled Sim results
+res         <- readRDS(file = "~/Documents/UNC/Dissertation/super prior/Code/Sims/Results/compiled_Sims.rds")
+res_supp    <- readRDS(file = "~/Documents/UNC/Dissertation/super prior/Code/Sims_supp/Results/compiled_Sims.rds")
+res_avg_wts <- rbind(res$res_avg_wts, res_supp$res_avg_wts)
+res_avg_trt <- rbind(res$res_avg_trt, res_supp$res_avg_trt)
+rm(res, res_supp)
+
+res_avg_wts$case <- recode(
+  res_avg_wts$case,
+  BHM = "Parameter~Shift", PP = "Exchangeable", UNEXCH = "Unexchangeable"
+)
+res_avg_wts$case <- factor(
+  res_avg_wts$case,
+  levels = c("Exchangeable", "Parameter~Shift", "Unexchangeable"),
+  ordered = T
+)
+
+res_avg_trt$case <- recode(
+  res_avg_trt$case,
+  BHM = "Parameter~Shift", PP = "Exchangeable", UNEXCH = "Unexchangeable"
+)
+res_avg_trt$case <- factor(
+  res_avg_trt$case,
+  levels = c("Exchangeable", "Parameter~Shift", "Unexchangeable"),
+  ordered = T
+)
+
+## convert res_avg_wts to long format
+res_avg_wts_long <- res_avg_wts %>%
+  pivot_longer(
+    cols = starts_with("mean_"),
+    names_to = "Type",
+    values_to = "weight"
+  )
+res_avg_wts_long$Type <- recode(
+  res_avg_wts_long$Type, `mean_post_prob` = "Ensemble~(BMA~Weights)", `mean_pbma_wts` = "Ensemble~(Pseudo-BMA~Weights)",
+  `mean_pbma_BB_wts` = "Ensemble~(Pseudo-BMA+~Weights)", `mean_stacking_wts` = "Ensemble~(Stacking~Weights)"
+)
+res_avg_wts_long$Type <- factor(
+  res_avg_wts_long$Type, levels = c("Ensemble~(BMA~Weights)", "Ensemble~(Pseudo-BMA~Weights)", "Ensemble~(Pseudo-BMA+~Weights)", "Ensemble~(Stacking~Weights)"), ordered = T
+)
+res_avg_wts_long$method <- recode(
+  res_avg_wts_long$method,
+  bhm = "BHM", leap = "LEAP", 
+  pp = "PP~(a[0] == 0.5)", 
+  psipp = "PSIPP",
+  ref = "Reference"
+)
+res_avg_wts_long$method <- factor(
+  res_avg_wts_long$method,
+  levels = c("Reference", "BHM", "LEAP", "PP~(a[0] == 0.5)", "PSIPP"),
+  ordered = T
+)
+
+## convert res_avg_trt to long format
+res_avg_trt_long <- res_avg_trt %>%
+  pivot_longer(
+    cols = all_of(c("avg_log_var", "bias", "log_mse", "ci.cov", "avg_ci_width")),
+    names_to = "metrics",
+    values_to = "measurement"
+  )
+res_avg_trt_long$metrics <- recode(
+  res_avg_trt_long$metrics, `log_mse` = "Log(MSE)", `bias` = "Bias", 
+  `avg_log_var` = "Avg Log(Var)", `ci.cov` = "Coverage Prob", 
+  `avg_ci_width` = "Avg CI Width"
+)
+res_avg_trt_long$metrics <- factor(
+  res_avg_trt_long$metrics, levels = c("Bias", "Log(MSE)", "Avg Log(Var)", "Coverage Prob", "Avg CI Width"), 
+  ordered = T
+)
+res_avg_trt_long$method <- recode(
+  res_avg_trt_long$method,
+  bhm = "BHM", bma = "Ensemble~(BMA~Weights)", leap = "LEAP", 
+  pp = "PP~(a[0] == 0.5)", psipp = "PSIPP",
+  pbma = "Ensemble~(Pseudo-BMA~Weights)", `pbma_BB` = "Ensemble~(Pseudo-BMA+~Weights)", 
+  ref = "Reference", stacking = "Ensemble~(Stacking~Weights)"
+)
+res_avg_trt_long$method <- factor(
+  res_avg_trt_long$method,
+  levels = c("Reference", "BHM", "LEAP", "PP~(a[0] == 0.5)", "PSIPP",
+             "Ensemble~(BMA~Weights)", "Ensemble~(Pseudo-BMA~Weights)", "Ensemble~(Pseudo-BMA+~Weights)", "Ensemble~(Stacking~Weights)"),
+  ordered = T
+)
+```
+
+
+We focus on simulation results under censoring proportion being 0.4.
+
+
+# Plot of Average Model Weights
+
+```{r}
+color_palette = c("#999999", "#B07AA1", "#F28E2B", "#59A14F", "#4E79A7")
+
+res_avg_wts_long %>%
+    filter(`cens.prop` == 0.4) %>% 
+    ggplot(aes(x = nevents, y = weight, color = method)) +
+      geom_line() +
+      geom_point() +
+      scale_colour_manual(values=color_palette, labels = function(x) parse(text = x)) +
+      #scale_color_tableau("Tableau 10", type = "regular") +
+      labs(color = "Prior",
+           x = TeX("$n_{events}$"),
+           title = TeX("Average Construct Weights by Case ($\\delta = 0.4$)")) +
+      guides(color = guide_legend(nrow = 2, byrow = TRUE)) +
+      facet_grid(case~Type, labeller = label_parsed) +
+      theme_bw() +
+      theme(legend.position = "bottom",
+            legend.text=element_text(size=10),
+            legend.key.width= unit(2, 'cm'), 
+            legend.margin=margin(),
+            strip.text.x = element_text(size = 10),
+            strip.text.y = element_text(size = 10),
+            plot.title = element_text(hjust = 0.5, size = 14))
+## supp_sims_aft_weights_nevents_600
+```
+
+
+# Plot of Metrics on Estimated Treatment Effect
+
+```{r}
+color_palette1 = c("#999999", "#B07AA1", "#F28E2B", "#59A14F", "#4E79A7")
+color_palette2 = c("#FF9DA7", "#B6992D", "#F1CE63", "#5fa2ce")
+
+# Modify the data and plot
+plt <- res_avg_trt_long %>%
+  filter(`cens.prop` == 0.4) %>%
+  mutate(
+    method_group = ifelse(grepl("Ensemble~", method), "Ensemble", "Individual"),
+    facet_group = paste(case, method_group)
+  ) %>%
+  ggplot(aes(x = nevents, y = measurement, color = method, shape = method)) +
+  geom_line() +
+  geom_hline(
+    data = res_avg_trt_long %>%
+      filter(metrics == "Coverage Prob"),
+    aes(yintercept = 0.95),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_hline(
+    data = res_avg_trt_long %>%
+      filter(metrics == "Bias"),
+    aes(yintercept = 0),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_point(size = 2) +
+  scale_color_manual(
+    values = c(
+      color_palette1, # First five methods
+      color_palette2  # Last four methods
+    ),
+    breaks = c(
+      "Reference", "BHM", "LEAP", "PP~(a[0] == 0.5)", "PSIPP",
+      "Ensemble~(BMA~Weights)", "Ensemble~(Pseudo-BMA~Weights)",
+      "Ensemble~(Pseudo-BMA+~Weights)", "Ensemble~(Stacking~Weights)"
+    ),
+    labels = function(x) parse(text = x)
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Reference" = 16, "BHM" = 16, "LEAP" = 16, "PP~(a[0] == 0.5)" = 16, "PSIPP" = 16,
+      "Ensemble~(BMA~Weights)" = 17, "Ensemble~(Pseudo-BMA~Weights)" = 17,
+      "Ensemble~(Pseudo-BMA+~Weights)" = 17, "Ensemble~(Stacking~Weights)" = 17
+    ),
+    labels = function(x) parse(text = x)
+  ) +
+  guides(
+    color = guide_legend(
+      override.aes = list(shape = c(16, 16, 16, 16, 16, 17, 17, 17, 17)),
+      nrow = 3, byrow = TRUE
+    ),
+    shape = "none"
+  ) +
+  labs(
+    color = "Method",
+    x = TeX("$n_{events}$"),
+    title = TeX("Metrics on Estimated Difference in Two-Year RFS Probabilities ($\\delta = 0.4$)")
+  ) +
+  facet_grid(
+    metrics ~ facet_group,
+    scales = "free_y",
+    labeller = labeller(
+      facet_group = function(labels) {
+        labels <- gsub("Exchangeable Ensemble", "Exchangeable\n(Ensemble)", labels)
+        labels <- gsub("Exchangeable Individual", "Exchangeable\n(Individual)", labels)
+        labels <- gsub("Parameter~Shift Ensemble", "Parameter Shift\n(Ensemble)", labels)
+        labels <- gsub("Parameter~Shift Individual", "Parameter Shift\n(Individual)", labels)
+        labels <- gsub("Unexchangeable Ensemble", "Unexchangeable\n(Ensemble)", labels)
+        labels <- gsub("Unexchangeable Individual", "Unexchangeable\n(Individual)", labels)
+        labels
+      }
+    )
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    legend.text = element_text(size = 10),
+    legend.key.width = unit(2, 'cm'),
+    legend.margin = margin(),
+    strip.text.x = element_text(size = 10),
+    strip.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    panel.spacing = unit(1, "lines")
+  )
+plt
+## supp_sims_aft_metrics_nevents_600
+```
+
