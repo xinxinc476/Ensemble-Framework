@@ -123,21 +123,19 @@ for (i in 1:nrow(grid)) {
     models <- c(models, model.i)
   }
   print( paste0("######################## Completed iteration ", i, " #########################"))
-  
-  res <- list(
-    surv.trt.list  = surv.trt.list,
-    surv.ctl.list  = surv.ctl.list,
-    lpd.trt.list   = lpd.trt.list,
-    lpd.ctl.list   = lpd.ctl.list,
-    logml.trt.vals = logml.trt.vals,
-    logml.ctl.vals = logml.ctl.vals,
-    surv.diff.list = surv.diff.list,
-    estim = estim,
-    priors = priors,
-    models = models
-  )
 }
-
+res <- list(
+  surv.trt.list  = surv.trt.list,
+  surv.ctl.list  = surv.ctl.list,
+  lpd.trt.list   = lpd.trt.list,
+  lpd.ctl.list   = lpd.ctl.list,
+  logml.trt.vals = logml.trt.vals,
+  logml.ctl.vals = logml.ctl.vals,
+  surv.diff.list = surv.diff.list,
+  estim = estim,
+  priors = priors,
+  models = models
+)
 
 ## compute the 2-year RFS probabilities for IFN arm using the ensemble methods
 ## assume uniform initial construct probabilities
